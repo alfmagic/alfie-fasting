@@ -1,649 +1,791 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-const STORAGE_KEY = 'fasting-logs';
-const accent = '#ff6b1a';
-const panel = '#121212';
-const text = '#e6e6e6';
-const muted = '#8a8a8a';
+const STORAGE_KEY = 'alfie-fasting-logs';
+const PROFILE_KEY = 'alfie-fasting-profile';
 
-const formatDuration = (ms) => {
+// ── Palette ────────────────────────────────────────────────────────────────
+// Electric cyan: split-complementary to red-orange, pops on near-black.
+// Swap ACCENT to try: violet '#a78bfa' · lime '#a3e635' · gold '#fbbf24'
+const ACCENT = '#22d3ee';
+const BG     = '#0d0d0d';
+const PANEL  = '#0f0f0f';
+const TEXT   = '#e4e4e4';
+const MUTED  = '#5a5a5a';
+const R = 120, CX = 160, CY = 160;
+const CIRC = 2 * Math.PI * R;
+
+const PRESETS = [
+  { label: 'Circadian', hours: 13,  color: '#7c3aed' },
+  { label: '16:8 TRF',  hours: 16,  color: '#0891b2' },
+  { label: '18:6 TRF',  hours: 18,  color: '#059669' },
+  { label: '20:4 TRF',  hours: 20,  color: '#d97706' },
+  { label: '36-Hour',   hours: 36,  color: '#2563eb' },
+  { label: 'Custom',    hours: null, color: '#374151' },
+];
+
+const DAY_PRESETS = [
+  { label: '1 day',  hours: 24  },
+  { label: '2 days', hours: 48  },
+  { label: '3 days', hours: 72  },
+  { label: '4 days', hours: 96  },
+  { label: '5 days', hours: 120 },
+  { label: '7 days', hours: 168 },
+];
+
+const ACCENT_GOAL = '#22c55e'; // green — ring turns this color when goal is reached
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function fmtHHMMSS(ms) {
   if (ms < 0) ms = 0;
-  const totalMinutes = Math.floor(ms / 60000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return `${hours}h ${String(minutes).padStart(2, '0')}m`;
-};
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+}
+function parseTime(ms) {
+  if (ms < 0) ms = 0;
+  const s = Math.floor(ms / 1000);
+  return { h: Math.floor(s / 3600), m: Math.floor((s % 3600) / 60), s: s % 60 };
+}
+function fmtDuration(ms) {
+  if (ms < 0) ms = 0;
+  const h = Math.floor(ms / 3_600_000), m = Math.floor((ms % 3_600_000) / 60_000);
+  return `${h}h ${String(m).padStart(2,'0')}m`;
+}
+function fmtHoursLabel(hours) {
+  if (hours < 24) return `${hours}h`;
+  const d = Math.floor(hours / 24), h = hours % 24;
+  return h > 0 ? `${d}d ${h}h` : `${d} day${d !== 1 ? 's' : ''}`;
+}
+function fmtDate(iso) {
+  return new Date(iso).toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+}
+function fmtTime(iso) {
+  return new Date(iso).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit', hour12:false });
+}
+function toLocalInput(iso) {
+  const d = new Date(iso);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0,16);
+}
 
-const formatDate = (iso) => {
-  const date = new Date(iso);
-  return date.toLocaleDateString('en-GB', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  });
-};
-
-const formatTime = (iso) => {
-  const date = new Date(iso);
-  return date.toLocaleTimeString('en-GB', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
-};
-
-const toLocalInputValue = (iso) => {
-  const date = new Date(iso);
-  const tzOffset = date.getTimezoneOffset() * 60000;
-  const local = new Date(date.getTime() - tzOffset);
-  return local.toISOString().slice(0, 16);
-};
-
-const getStorageApi = () => {
+function getStorage() {
   if (window.storage?.get && window.storage?.set) {
     return {
-      get: async (key) => {
-        const response = await window.storage.get({ [key]: null });
-        return response?.[key] ?? null;
-      },
-      set: async (key, value) => {
-        await window.storage.set({ [key]: value });
-      },
+      get: async (k) => { const r = await window.storage.get({ [k]: null }); return r?.[k] ?? null; },
+      set: async (k, v) => { await window.storage.set({ [k]: v }); },
     };
   }
   return {
-    get: async (key) => {
-      const raw = localStorage.getItem(key);
-      return raw ? JSON.parse(raw) : null;
-    },
-    set: async (key, value) => {
-      localStorage.setItem(key, JSON.stringify(value));
-    },
+    get: async (k) => { const r = localStorage.getItem(k); return r ? JSON.parse(r) : null; },
+    set: async (k, v) => { localStorage.setItem(k, JSON.stringify(v)); },
   };
-};
+}
 
-const Stat = ({ label, value }) => {
-  return (
-    <div style={styles.statCard}>
-      <div style={styles.statLabel}>{label}</div>
-      <div style={styles.statValue}>{value}</div>
-    </div>
-  );
-};
+function arcTip(progress) {
+  const a = progress * 2 * Math.PI - Math.PI / 2;
+  return { x: CX + R * Math.cos(a), y: CY + R * Math.sin(a) };
+}
 
+function calcBMR(gender, age, weight, height) {
+  const a = Number(age), w = Number(weight), h = Number(height);
+  if (!a || !w || !h || a <= 0 || w <= 0 || h <= 0) return null;
+  const base = 10 * w + 6.25 * h - 5 * a;
+  if (gender === 'male')   return base + 5;
+  if (gender === 'female') return base - 161;
+  return base - 78;
+}
+function calcKcal(bmr, ms) {
+  if (!bmr || ms <= 0) return null;
+  return Math.round((bmr / 24) * (ms / 3_600_000));
+}
+function fmtFatMass(kcal) {
+  const kg = kcal / 7700;
+  return kg < 0.1 ? `${Math.round(kg * 1000)}g` : `${kg.toFixed(2)} kg`;
+}
+
+// ── App ────────────────────────────────────────────────────────────────────
 export default function App() {
-  const storage = useRef(getStorageApi());
-  const [completedLogs, setCompletedLogs] = useState([]);
-  const [activeLog, setActiveLog] = useState(null);
-  const [now, setNow] = useState(Date.now());
-  const [modalOpen, setModalOpen] = useState(false);
-  const [deleteOpen, setDeleteOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState(null);
-  const [form, setForm] = useState({ start: '', end: '', note: '' });
-  const [editId, setEditId] = useState(null);
-  const [formError, setFormError] = useState('');
+  const storeRef = useRef(getStorage());
+
+  const [logs,   setLogs]   = useState([]);
+  const [active, setActive] = useState(null);
+  const [now,    setNow]    = useState(Date.now());
+
+  const [profile,     setProfile]     = useState({ gender:'male', age:'', weight:'', height:'' });
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileForm, setProfileForm] = useState({ gender:'male', age:'', weight:'', height:'' });
+
+  const [presetOpen, setPresetOpen] = useState(false);
+  const [customVal,  setCustomVal]  = useState('');
+  const [customUnit, setCustomUnit] = useState('hours');
+  const [customErr,  setCustomErr]  = useState('');
+
+  // 'elapsed' shows elapsed time + %; 'remaining' shows time left
+  const [centerMode, setCenterMode] = useState('elapsed');
+
+  // live-fast targeted editing: 'start' | 'goal' | null
+  const [liveEdit,     setLiveEdit]     = useState(null);
+  const [liveStartVal, setLiveStartVal] = useState('');
+  const [liveGoalVal,  setLiveGoalVal]  = useState('');
+  const [liveGoalUnit, setLiveGoalUnit] = useState('hours');
+  const [liveErr,      setLiveErr]      = useState('');
+
+  const [editModal, setEditModal] = useState(null);
+  const [editForm,  setEditForm]  = useState({ start:'', end:'', goalHours:'', note:'' });
+  const [editErr,   setEditErr]   = useState('');
+  const [delTarget, setDelTarget] = useState(null);
+
   const initialized = useRef(false);
 
-  const saveAll = useCallback(async (completed, active) => {
-    const payload = [...completed];
-    if (active) payload.unshift(active);
-    await storage.current.set(STORAGE_KEY, payload);
-  }, []);
-
+  // ── load ──
   useEffect(() => {
-    const load = async () => {
-      const saved = await storage.current.get(STORAGE_KEY);
+    storeRef.current.get(STORAGE_KEY).then(saved => {
       const list = Array.isArray(saved) ? saved : [];
-      const active = list.find((item) => item.end === null) ?? null;
-      const completed = list.filter((item) => item.end !== null);
-      setCompletedLogs(completed.sort((a, b) => new Date(b.start) - new Date(a.start)));
-      setActiveLog(active);
-    };
-    load();
+      setActive(list.find(l => l.end === null) ?? null);
+      setLogs(list.filter(l => l.end !== null).sort((a,b) => new Date(b.start)-new Date(a.start)));
+    });
+    try {
+      const p = JSON.parse(localStorage.getItem(PROFILE_KEY) || 'null');
+      if (p) { setProfile(p); setProfileForm(p); }
+    } catch {}
+  }, []);
+
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
+
+  const persist = useCallback(async (done, act) => {
+    const payload = [...done]; if (act) payload.unshift(act);
+    await storeRef.current.set(STORAGE_KEY, payload);
   }, []);
 
   useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(interval);
-  }, []);
+    if (!initialized.current) { initialized.current = true; return; }
+    persist(logs, active);
+  }, [logs, active, persist]);
 
-  useEffect(() => {
-    if (!initialized.current) {
-      initialized.current = true;
-      return;
-    }
-    saveAll(completedLogs, activeLog);
-  }, [completedLogs, activeLog, saveAll]);
+  // ── week dots ──
+  const DAYS = ['MON','TUE','WED','THU','FRI','SAT','SUN'];
+  const weekDots = useMemo(() => {
+    const today = new Date();
+    const monday = new Date(today);
+    const dow = today.getDay();
+    monday.setDate(today.getDate() + (dow === 0 ? -6 : 1 - dow));
+    monday.setHours(0,0,0,0);
+    const all = active ? [...logs, active] : logs;
+    return DAYS.map((day, i) => {
+      const ds = new Date(monday.getTime() + i * 86_400_000);
+      const de = new Date(ds.getTime() + 86_400_000);
+      return {
+        day,
+        hasFast: all.some(l => { const s = new Date(l.start); return s >= ds && s < de; }),
+        isToday: today.toDateString() === ds.toDateString(),
+      };
+    });
+  }, [logs, active, now]);
 
-  const startQuickFast = (hours) => {
-    if (activeLog) return;
-    const start = new Date(Date.now() - hours * 3600 * 1000).toISOString();
-    const active = { id: Date.now(), start, end: null, note: `${hours}h quick start` };
-    setActiveLog(active);
-    saveAll(completedLogs, active);
+  // ── ring ──
+  const elapsed    = active ? now - new Date(active.start).getTime() : 0;
+  const goalMs     = active ? (active.goalHours || 16) * 3_600_000 : 1;
+  const progress   = active ? Math.min(elapsed / goalMs, 1) : 0;
+  const goalReached = active && progress >= 1;
+  const arcColor    = goalReached ? ACCENT_GOAL : ACCENT;
+  const tip         = arcTip(progress);
+  const dashOffset  = CIRC * (1 - progress);
+
+  const remaining   = active ? Math.max(goalMs - elapsed, 0) : 0;
+  const pct         = active ? (progress * 100).toFixed(1) : '0.0';
+  const displayMs   = centerMode === 'elapsed' ? elapsed : remaining;
+  const tParts      = parseTime(displayMs);
+
+  // ── calories ──
+  const bmr        = useMemo(() => calcBMR(profile.gender, profile.age, profile.weight, profile.height), [profile]);
+  const activeKcal = active ? calcKcal(bmr, elapsed) : null;
+  const goalEndTime = active
+    ? new Date(new Date(active.start).getTime() + active.goalHours * 3_600_000).toISOString()
+    : null;
+
+  // ── fast control ──
+  const startFast = (hours) => {
+    if (active) return;
+    setActive({ id: Date.now(), start: new Date().toISOString(), end: null, goalHours: hours, note: '' });
+    setPresetOpen(false); setCustomVal(''); setCustomErr('');
+  };
+  const endFast = () => {
+    if (!active) return;
+    const finished = { ...active, end: new Date().toISOString() };
+    setLogs(prev => [finished, ...prev].sort((a,b) => new Date(b.start)-new Date(a.start)));
+    setActive(null);
+  };
+  const handleCustomStart = () => {
+    let h = parseFloat(customVal);
+    if (customUnit === 'days') h *= 24;
+    if (!h || h < 1 || h > 168) { setCustomErr(`Enter 1–${customUnit === 'days' ? '7 days' : '168 hours'}.`); return; }
+    startFast(Math.round(h * 10) / 10);
   };
 
-  const stopFast = async () => {
-    if (!activeLog) return;
-    const finished = { ...activeLog, end: new Date().toISOString() };
-    const updated = [finished, ...completedLogs];
-    setCompletedLogs(updated);
-    setActiveLog(null);
-    await saveAll(updated, null);
+  // ── live edit: start ──
+  const openLiveStart = () => {
+    setLiveStartVal(toLocalInput(active.start));
+    setLiveErr(''); setLiveEdit('start');
+  };
+  const submitLiveStart = (e) => {
+    e.preventDefault();
+    const d = new Date(liveStartVal);
+    if (isNaN(d.getTime())) { setLiveErr('Invalid date.'); return; }
+    if (d >= new Date()) { setLiveErr('Start must be in the past.'); return; }
+    setActive(prev => ({ ...prev, start: d.toISOString() }));
+    setLiveEdit(null); setLiveErr('');
   };
 
-  const openNewLog = () => {
-    setEditId(null);
-    setFormError('');
-    setForm({ start: toLocalInputValue(new Date().toISOString()), end: toLocalInputValue(new Date().toISOString()), note: '' });
-    setModalOpen(true);
+  // ── live edit: goal ──
+  const openLiveGoal = () => {
+    setLiveGoalVal(String(active.goalHours || 16));
+    setLiveGoalUnit('hours'); setLiveErr(''); setLiveEdit('goal');
+  };
+  const applyLiveGoal = (hours) => {
+    setActive(prev => ({ ...prev, goalHours: hours }));
+    setLiveEdit(null); setLiveErr('');
+  };
+  const submitLiveGoalCustom = () => {
+    let h = parseFloat(liveGoalVal);
+    if (liveGoalUnit === 'days') h *= 24;
+    if (!h || h < 1 || h > 168) { setLiveErr(`Enter 1–${liveGoalUnit === 'days' ? '7 days' : '168 hours'}.`); return; }
+    applyLiveGoal(Math.round(h * 10) / 10);
   };
 
+  // ── log edit ──
   const openEditLog = (log) => {
-    setEditId(log.id);
-    setFormError('');
-    setForm({ start: toLocalInputValue(log.start), end: toLocalInputValue(log.end), note: log.note || '' });
-    setModalOpen(true);
+    setEditForm({ start: toLocalInput(log.start), end: toLocalInput(log.end), goalHours: String(log.goalHours||16), note: log.note||'' });
+    setEditErr(''); setEditModal(log.id);
   };
-
-  const handleFormChange = (field, value) => {
-    setFormError('');
-    setForm((prev) => ({ ...prev, [field]: value }));
-  };
-
-  const applyPreset = (hours) => {
-    const end = new Date();
-    const start = new Date(end.getTime() - hours * 3600 * 1000);
-    setForm({ start: toLocalInputValue(start.toISOString()), end: toLocalInputValue(end.toISOString()), note: `${hours}h preset` });
-  };
-
-  const submitLog = async (event) => {
-    event.preventDefault();
-    const start = new Date(form.start);
-    const end = new Date(form.end);
-
-    if (!form.start || !form.end || start >= end) {
-      setFormError('Please choose a valid start and end time. End must be after start.');
-      return;
-    }
-
-    const entry = { id: editId ?? Date.now(), start: start.toISOString(), end: end.toISOString(), note: form.note.trim() };
-    const updated = editId
-      ? completedLogs.map((item) => (item.id === editId ? entry : item))
-      : [entry, ...completedLogs];
-
-    updated.sort((a, b) => new Date(b.start) - new Date(a.start));
-    setCompletedLogs(updated);
-    setModalOpen(false);
-    setEditId(null);
-    setFormError('');
-    await saveAll(updated, activeLog);
-  };
-
-  const confirmDelete = (log) => {
-    setDeleteTarget(log);
-    setDeleteOpen(true);
-  };
-
-  const executeDelete = async () => {
-    if (!deleteTarget) return;
-    const updated = completedLogs.filter((item) => item.id !== deleteTarget.id);
-    setCompletedLogs(updated);
-    setDeleteOpen(false);
-    setDeleteTarget(null);
-    await saveAll(updated, activeLog);
+  const closeEdit = () => { setEditModal(null); setEditErr(''); };
+  const submitEdit = (e) => {
+    e.preventDefault();
+    const start = new Date(editForm.start), gh = Number(editForm.goalHours);
+    if (!editForm.start || isNaN(start.getTime())) { setEditErr('Invalid start time.'); return; }
+    if (!gh || gh < 1 || gh > 168) { setEditErr('Goal hours must be 1–168.'); return; }
+    const end = new Date(editForm.end);
+    if (!editForm.end || isNaN(end.getTime()) || end <= start) { setEditErr('End must be after start.'); return; }
+    setLogs(prev => prev.map(l => l.id === editModal
+      ? { ...l, start: start.toISOString(), end: end.toISOString(), goalHours: gh, note: editForm.note.trim() }
+      : l));
+    closeEdit();
   };
 
   const stats = useMemo(() => {
-    const totalFasts = completedLogs.length;
-    const totalDuration = completedLogs.reduce((sum, log) => sum + (new Date(log.end) - new Date(log.start)), 0);
-    const averageDuration = totalFasts ? formatDuration(totalDuration / totalFasts) : '0h 00m';
-    const longest = totalFasts
-      ? formatDuration(Math.max(...completedLogs.map((log) => new Date(log.end) - new Date(log.start))))
-      : '0h 00m';
+    if (!logs.length) return { total: 0, avg: '—', longest: '—' };
+    const d = logs.map(l => new Date(l.end) - new Date(l.start));
+    const sum = d.reduce((a,b) => a+b, 0);
+    return { total: logs.length, avg: fmtDuration(sum / logs.length), longest: fmtDuration(Math.max(...d)) };
+  }, [logs]);
 
-    return {
-      totalFasts,
-      totalTime: formatDuration(totalDuration),
-      averageDuration,
-      longest,
-    };
-  }, [completedLogs]);
+  const customPreview = (() => {
+    const v = parseFloat(customVal);
+    if (!v || isNaN(v)) return '';
+    return customUnit === 'days' ? `= ${Math.round(v * 24)}h` : v >= 24 ? `≈ ${(v/24).toFixed(1)} days` : '';
+  })();
 
-  const activeElapsed = activeLog ? Date.now() - new Date(activeLog.start).getTime() : 0;
-  const canStartQuick = !activeLog;
+  const liveGoalPreview = (() => {
+    const v = parseFloat(liveGoalVal);
+    if (!v || isNaN(v)) return '';
+    return liveGoalUnit === 'days' ? `= ${Math.round(v * 24)}h` : v >= 24 ? `≈ ${(v/24).toFixed(1)} days` : '';
+  })();
 
   return (
-    <div style={styles.page}>
+    <div style={{ minHeight:'100vh', background:BG, color:TEXT, fontFamily:"'IBM Plex Mono',monospace", padding:'24px 16px 56px' }}>
       <style>{`
-        .hover-fade:hover { opacity: 0.88; transform: translateY(-1px); }
-        .pulse-border { animation: pulse 1.8s ease-in-out infinite; }
-        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,107,26,0.24); } 70% { box-shadow: 0 0 0 24px rgba(255,107,26,0); } 100% { box-shadow: 0 0 0 0 rgba(255,107,26,0); } }
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap');
+        *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+        body { background:${BG}; }
+        button, input, select { font-family:'IBM Plex Mono',monospace; }
+        .hov { transition:opacity .13s,transform .13s; cursor:pointer; }
+        .hov:hover  { opacity:.78; transform:translateY(-1px); }
+        .hov:active { transform:translateY(0); }
+        .tap { transition:background .13s,border-color .13s; cursor:pointer; }
+        .tap:hover { background:#181818 !important; border-color:${ACCENT}55 !important; }
+        input[type="datetime-local"],input[type="number"],input[type="text"],select { color-scheme:dark; }
+        @keyframes pulse-ring {
+          0%   { box-shadow:0 0 0 0    ${ACCENT}44; }
+          70%  { box-shadow:0 0 0 20px ${ACCENT}00; }
+          100% { box-shadow:0 0 0 0    ${ACCENT}00; }
+        }
+        .pulse { animation:pulse-ring 2.4s ease-out infinite; }
       `}</style>
-      <div style={styles.container}>
-        <header style={styles.header}>
-          <div style={styles.titleRow}>
-            <span style={styles.title}>ALFIE</span>
-            <span style={styles.dot}>.</span>
-          </div>
-          <div style={styles.subtitle}>fasting tracker</div>
-        </header>
 
-        <section style={styles.section}>
-          <div style={styles.sectionHeader}>
-            <div>
-              <div style={styles.sectionTitle}>Quick start</div>
-              <div style={styles.sectionMeta}>Launch a fast from a preset duration.</div>
+      <div style={{ maxWidth:460, margin:'0 auto' }}>
+
+        {/* ── HEADER ── */}
+        <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:34 }}>
+          <div>
+            <div style={{ fontSize:'2rem', fontWeight:700, letterSpacing:'0.04em', lineHeight:1 }}>
+              alfie<span style={{ color:ACCENT }}>.</span>
             </div>
-            <button style={styles.simpleButton} onClick={openNewLog}>Log past fast</button>
-          </div>
-          <div style={styles.grid}>
-            {['16:8', '18:6', '20:4', '24h', '36h', '48h'].map((label) => {
-              const hours = Number(label.replace('h', '').split(':')[0]);
-              return (
-                <button
-                  key={label}
-                  style={{
-                    ...styles.quickButton,
-                    opacity: canStartQuick ? 1 : 0.45,
-                    cursor: canStartQuick ? 'pointer' : 'not-allowed',
-                  }}
-                  className="hover-fade"
-                  onClick={() => canStartQuick && startQuickFast(hours)}
-                  disabled={!canStartQuick}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        {activeLog && (
-          <section style={{ ...styles.section, ...styles.activeSection }}>
-            <div style={styles.activeCard} className="pulse-border">
-              <div style={styles.activeHeading}>Active fast</div>
-              <div style={styles.activeTime}>{formatDuration(activeElapsed)}</div>
-              <div style={styles.activeRange}>{`${formatDate(activeLog.start)} · ${formatTime(activeLog.start)} → now`}</div>
-              {activeLog.note && <div style={styles.activeNote}>{activeLog.note}</div>}
-              <button style={styles.stopButton} onClick={stopFast}>STOP NOW</button>
+            <div style={{ color:MUTED, fontSize:'0.56rem', letterSpacing:'0.26em', textTransform:'uppercase', marginTop:7 }}>
+              fasting tracker
             </div>
-          </section>
-        )}
-
-        <section style={styles.section}>
-          <div style={styles.statsRow}>
-            <Stat label="Total fasts" value={stats.totalFasts} />
-            <Stat label="Total time" value={stats.totalTime} />
-            <Stat label="Average" value={stats.averageDuration} />
-            <Stat label="Longest" value={stats.longest} />
           </div>
-        </section>
-
-        <section style={styles.section}>
-          <div style={styles.sectionHeader}>History</div>
-          <div style={styles.tableHeader}>
-            <div style={styles.tableCellWide}>Fast</div>
-            <div style={styles.tableCell}>Duration</div>
-            <div style={styles.tableCell}>Note</div>
-            <div style={styles.tableCellActions}>Actions</div>
+          <div style={{ display:'flex', alignItems:'flex-start', gap:12, paddingTop:2 }}>
+            <div style={{ display:'flex', gap:7 }}>
+              {weekDots.map(({ day, hasFast, isToday }) => (
+                <div key={day} style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:5 }}>
+                  <div style={{
+                    width:8, height:8, borderRadius:'50%',
+                    background: hasFast ? ACCENT : '#1e1e1e',
+                    outline: isToday ? `2px solid ${ACCENT}` : '2px solid transparent',
+                    outlineOffset:2, transition:'background .3s',
+                  }} />
+                  <span style={{ fontSize:'0.48rem', color:MUTED, letterSpacing:'0.04em' }}>{day}</span>
+                </div>
+              ))}
+            </div>
+            <button className="hov" title="Body stats"
+              style={{ ...S.iconBtn, padding:'5px 9px', fontSize:'0.85rem' }}
+              onClick={() => { setProfileForm(profile); setProfileOpen(true); }}>⚙</button>
           </div>
-          {completedLogs.length === 0 ? (
-            <div style={styles.emptyState}>No completed fasts logged yet.</div>
-          ) : (
-            completedLogs.map((log) => (
-              <div key={log.id} style={styles.historyRow}>
-                <div style={styles.tableCellWide}>
-                  <div>{formatDate(log.start)}</div>
-                  <div style={styles.smallText}>{`${formatTime(log.start)} → ${formatTime(log.end)}`}</div>
+        </div>
+
+        {/* ── RING ── */}
+        <div style={{ display:'flex', flexDirection:'column', alignItems:'center', marginBottom:20 }}>
+
+          {/* SVG arc + HTML center overlay */}
+          <div style={{ position:'relative', width:290, height:290 }}>
+            <svg viewBox="0 0 320 320" width={290} height={290}
+              style={{ position:'absolute', top:0, left:0, overflow:'visible' }}>
+              {/* Track */}
+              <circle cx={CX} cy={CY} r={R} fill="none" stroke="#161616" strokeWidth={14} />
+              {/* Arc */}
+              {active && (
+                <circle cx={CX} cy={CY} r={R} fill="none" stroke={arcColor} strokeWidth={14} strokeLinecap="round"
+                  strokeDasharray={CIRC} strokeDashoffset={dashOffset}
+                  transform={`rotate(-90 ${CX} ${CY})`}
+                  style={{ transition:'stroke-dashoffset .8s ease, stroke .6s ease' }} />
+              )}
+              {/* Tip dot */}
+              {active && progress > 0.005 && (
+                <circle cx={tip.x} cy={tip.y} r={goalReached ? 0 : 6} fill="white"
+                  style={{ filter:'drop-shadow(0 0 4px white)', transition:'r .4s ease' }} />
+              )}
+            </svg>
+
+            {/* Center content overlay */}
+            <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column',
+              alignItems:'center', justifyContent:'center', gap:0 }}>
+
+              {/* Timer — click to toggle elapsed ↔ remaining */}
+              <div
+                onClick={() => active && setCenterMode(m => m === 'elapsed' ? 'remaining' : 'elapsed')}
+                style={{ cursor: active ? 'pointer' : 'default', textAlign:'center', userSelect:'none' }}
+                title={active ? 'Click to toggle elapsed / remaining' : undefined}
+              >
+                {/* h m s display */}
+                <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'center', gap:1, lineHeight:1 }}>
+                  {[
+                    [String(tParts.h).padStart(2,'0'), 'h'],
+                    [String(tParts.m).padStart(2,'0'), 'm'],
+                    [String(tParts.s).padStart(2,'0'), 's'],
+                  ].map(([num, unit], i) => (
+                    <span key={unit} style={{ display:'flex', alignItems:'flex-end', marginRight: i < 2 ? 4 : 0 }}>
+                      <span style={{ fontSize:'1.65rem', fontWeight:700, letterSpacing:'-0.01em', color: goalReached ? ACCENT_GOAL : TEXT }}>
+                        {num}
+                      </span>
+                      <span style={{ fontSize:'0.58rem', color:MUTED, marginBottom:3, marginLeft:1 }}>{unit}</span>
+                    </span>
+                  ))}
                 </div>
-                <div style={styles.tableCell}>{formatDuration(new Date(log.end) - new Date(log.start))}</div>
-                <div style={styles.tableCell}>{log.note || '—'}</div>
-                <div style={styles.tableCellActions}>
-                  <button style={styles.actionButton} onClick={() => openEditLog(log)}>Edit</button>
-                  <button style={styles.deleteButton} onClick={() => confirmDelete(log)}>Delete</button>
-                </div>
+
+                {/* Mode label */}
+                {active && (
+                  <div style={{ fontSize:'0.55rem', color: centerMode === 'elapsed' ? MUTED : arcColor,
+                    letterSpacing:'0.18em', textTransform:'uppercase', marginTop:6, transition:'color .3s' }}>
+                    {goalReached
+                      ? 'goal reached! ⇅'
+                      : centerMode === 'elapsed'
+                        ? `${pct}% elapsed ⇅`
+                        : `${(100 - parseFloat(pct)).toFixed(1)}% remaining ⇅`}
+                  </div>
+                )}
               </div>
-            ))
+
+              {/* Goal chip — click to change goal */}
+              {active && (
+                <div
+                  className="tap"
+                  onClick={openLiveGoal}
+                  style={{ marginTop:10, padding:'4px 12px', borderRadius:999,
+                    border:`1px solid ${goalReached ? ACCENT_GOAL+'55' : '#222'}`,
+                    background: goalReached ? ACCENT_GOAL+'18' : '#111',
+                    cursor:'pointer', userSelect:'none' }}
+                  title="Click to change goal"
+                >
+                  <span style={{ fontSize:'0.6rem', color: goalReached ? ACCENT_GOAL : MUTED,
+                    letterSpacing:'0.14em', textTransform:'uppercase' }}>
+                    {`${active.goalHours}h · ${fmtHoursLabel(active.goalHours)} ✎`}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Calorie strip */}
+          {active && activeKcal !== null && (
+            <div style={{ display:'flex', gap:20, marginTop:6, marginBottom:10,
+              background:'#0e0e0e', border:'1px solid #1c1c1c', borderRadius:14, padding:'10px 22px' }}>
+              <div style={{ textAlign:'center' }}>
+                <div style={{ color:MUTED, fontSize:'0.52rem', letterSpacing:'0.16em', marginBottom:4 }}>EST. BURNED</div>
+                <div style={{ fontSize:'0.95rem', fontWeight:700, color:'#fbbf24' }}>{activeKcal.toLocaleString()} kcal</div>
+              </div>
+              <div style={{ width:1, background:'#1e1e1e' }} />
+              <div style={{ textAlign:'center' }}>
+                <div style={{ color:MUTED, fontSize:'0.52rem', letterSpacing:'0.16em', marginBottom:4 }}>FAT EQUIV.</div>
+                <div style={{ fontSize:'0.95rem', fontWeight:700, color:'#a78bfa' }}>{fmtFatMass(activeKcal)}</div>
+              </div>
+            </div>
           )}
-        </section>
+          {active && !bmr && (
+            <button style={{ ...S.linkBtn, fontSize:'0.66rem', marginBottom:8 }}
+              onClick={() => { setProfileForm(profile); setProfileOpen(true); }}>
+              Add body stats to see calorie estimates →
+            </button>
+          )}
+
+          {/* STARTED / GOAL tappable cards */}
+          {active && goalEndTime && (
+            <div style={{ display:'flex', gap:10, marginBottom:14, width:'100%' }}>
+              <div className="tap"
+                style={{ flex:1, textAlign:'center', padding:'12px 10px', borderRadius:14,
+                  border:'1px solid #1a1a1a', background:'#0a0a0a', cursor:'pointer' }}
+                onClick={openLiveStart}>
+                <div style={{ color:MUTED, fontSize:'0.52rem', letterSpacing:'0.2em', textTransform:'uppercase', marginBottom:6 }}>Started ✎</div>
+                <div style={{ fontSize:'0.78rem', lineHeight:1.6 }}>{fmtDate(active.start)}</div>
+                <div style={{ fontSize:'0.78rem' }}>{fmtTime(active.start)}</div>
+              </div>
+              <div className="tap"
+                style={{ flex:1, textAlign:'center', padding:'12px 10px', borderRadius:14,
+                  border:`1px solid ${goalReached ? ACCENT_GOAL+'44' : '#1a1a1a'}`,
+                  background: goalReached ? ACCENT_GOAL+'0a' : '#0a0a0a', cursor:'pointer' }}
+                onClick={openLiveGoal}>
+                <div style={{ color: goalReached ? ACCENT_GOAL : MUTED, fontSize:'0.52rem', letterSpacing:'0.2em', textTransform:'uppercase', marginBottom:6 }}>Goal ✎</div>
+                <div style={{ fontSize:'0.78rem', lineHeight:1.6 }}>{fmtDate(goalEndTime)}</div>
+                <div style={{ fontSize:'0.78rem' }}>{fmtTime(goalEndTime)}</div>
+              </div>
+            </div>
+          )}
+
+          {active
+            ? <button className="hov pulse" style={{ ...S.pillBtn, background: goalReached ? ACCENT_GOAL : ACCENT, color:BG, transition:'background .6s ease' }} onClick={endFast}>END FAST</button>
+            : <button className="hov"       style={{ ...S.pillBtn, background:ACCENT, color:BG }} onClick={() => setPresetOpen(true)}>START FAST</button>
+          }
+        </div>
+
+        {/* ── STATS ── */}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:16 }}>
+          {[['FASTS', stats.total], ['AVG', stats.avg], ['LONGEST', stats.longest]].map(([l,v]) => (
+            <div key={l} style={{ background:PANEL, border:'1px solid #171717', borderRadius:14, padding:'14px 10px', textAlign:'center' }}>
+              <div style={{ color:MUTED, fontSize:'0.52rem', letterSpacing:'0.18em', marginBottom:7 }}>{l}</div>
+              <div style={{ fontSize:'0.88rem', fontWeight:700 }}>{v}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* ── HISTORY ── */}
+        <div style={{ background:PANEL, border:'1px solid #171717', borderRadius:18, padding:'18px 16px' }}>
+          <div style={{ color:MUTED, fontSize:'0.54rem', letterSpacing:'0.22em', textTransform:'uppercase', marginBottom:14 }}>History</div>
+          {logs.length === 0
+            ? <div style={{ color:MUTED, fontSize:'0.82rem', padding:'6px 0' }}>No completed fasts yet.</div>
+            : logs.map(log => {
+                const dur  = new Date(log.end) - new Date(log.start);
+                const kcal = calcKcal(bmr, dur);
+                return (
+                  <div key={log.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'13px 0', borderTop:'1px solid #161616' }}>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontSize:'1.05rem', fontWeight:700 }}>{fmtDuration(dur)}</div>
+                      <div style={{ color:MUTED, fontSize:'0.68rem', marginTop:3 }}>
+                        {fmtDate(log.start)} {fmtTime(log.start)} → {fmtTime(log.end)}
+                      </div>
+                      {kcal !== null && (
+                        <div style={{ fontSize:'0.64rem', color:'#fbbf2477', marginTop:3 }}>
+                          ~{kcal.toLocaleString()} kcal · {fmtFatMass(kcal)}
+                        </div>
+                      )}
+                    </div>
+                    <button style={S.iconBtn} className="hov" onClick={() => openEditLog(log)}>✎</button>
+                    <button style={{ ...S.iconBtn, color:'#f87171' }} className="hov" onClick={() => setDelTarget(log.id)}>✕</button>
+                  </div>
+                );
+              })
+          }
+        </div>
       </div>
 
-      {modalOpen && (
-        <div style={styles.overlay} onClick={(e) => e.target === e.currentTarget && setModalOpen(false)}>
-          <div style={styles.modal}>
-            <div style={styles.modalHeader}>{editId ? 'Edit fast log' : 'Log a past fast'}</div>
-            <form onSubmit={submitLog}>
-              <div style={styles.fieldGroup}>
-                <label style={styles.label}>Start</label>
-                <input style={styles.input} type="datetime-local" value={form.start} onChange={(e) => handleFormChange('start', e.target.value)} required />
-              </div>
-              <div style={styles.fieldGroup}>
-                <label style={styles.label}>End</label>
-                <input style={styles.input} type="datetime-local" value={form.end} onChange={(e) => handleFormChange('end', e.target.value)} required />
-              </div>
-              <div style={styles.fieldGroup}>
-                <label style={styles.label}>Note</label>
-                <input style={styles.input} type="text" value={form.note} onChange={(e) => handleFormChange('note', e.target.value)} placeholder="Optional note" />
-              </div>
-              <div style={styles.presetBar}>
-                {[12, 16, 18, 24].map((hours) => (
-                  <button key={hours} type="button" style={styles.presetButton} onClick={() => applyPreset(hours)}>{hours}h</button>
-                ))}
-              </div>
-              {formError && <div style={styles.formError}>{formError}</div>}
-              <div style={styles.modalActions}>
-                <button type="button" style={styles.simpleButton} onClick={() => setModalOpen(false)}>Cancel</button>
-                <button type="submit" style={styles.primaryButton}>{editId ? 'Save log' : 'Add log'}</button>
+      {/* ══ PRESET MODAL ══ */}
+      {presetOpen && (
+        <Overlay onClose={() => { setPresetOpen(false); setCustomVal(''); setCustomErr(''); }}>
+          <div style={{ ...S.modalBox, maxHeight:'90vh', overflowY:'auto' }}>
+            <div style={S.modalTitle}>Start a fast</div>
+            <SectionLabel>Presets</SectionLabel>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:20 }}>
+              {PRESETS.map(p => (
+                <div key={p.label} className="hov"
+                  style={{ background:`${p.color}1a`, border:`1.5px solid ${p.color}55`, borderRadius:16,
+                    padding:'14px', height:118, display:'flex', flexDirection:'column', justifyContent:'space-between',
+                    cursor: p.hours ? 'pointer' : 'default' }}
+                  onClick={() => p.hours && startFast(p.hours)}
+                >
+                  <span style={{ fontSize:'0.58rem', color:MUTED, letterSpacing:'0.12em', textTransform:'uppercase' }}>{p.label}</span>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end' }}>
+                    <div>
+                      <div style={{ fontSize: p.hours ? '2.1rem' : '0.95rem', fontWeight:700, color: p.hours ? p.color : MUTED, lineHeight:1 }}>
+                        {p.hours ? `${p.hours}h` : 'custom'}
+                      </div>
+                      {p.hours && p.hours >= 24 && (
+                        <div style={{ fontSize:'0.58rem', color:p.color, opacity:.7, marginTop:3 }}>{fmtHoursLabel(p.hours)}</div>
+                      )}
+                    </div>
+                    <span style={{ color:MUTED, fontSize:'0.82rem' }}>ⓘ</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <SectionLabel>Quick days</SectionLabel>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, marginBottom:20 }}>
+              {DAY_PRESETS.map(d => (
+                <button key={d.hours} className="hov"
+                  style={{ border:'1px solid #1e1e1e', background:'#141414', color:TEXT, borderRadius:12,
+                    padding:'10px 6px', cursor:'pointer', textAlign:'center' }}
+                  onClick={() => startFast(d.hours)}
+                >
+                  <div style={{ fontSize:'0.85rem', fontWeight:700 }}>{d.label}</div>
+                  <div style={{ color:MUTED, fontSize:'0.62rem', marginTop:3 }}>{d.hours}h</div>
+                </button>
+              ))}
+            </div>
+            <SectionLabel>Custom</SectionLabel>
+            <UnitToggle value={customUnit} onChange={u => { setCustomUnit(u); setCustomVal(''); setCustomErr(''); }} />
+            <div style={{ display:'flex', gap:8, marginTop:8 }}>
+              <input type="number" min="1" max={customUnit==='days'?7:168} step={customUnit==='days'?.5:1}
+                placeholder={customUnit==='days'?'e.g. 3':'e.g. 48'} value={customVal}
+                onChange={e => { setCustomVal(e.target.value); setCustomErr(''); }}
+                style={{ ...S.input, flex:1 }} />
+              <button className="hov"
+                style={{ ...S.pillBtn, padding:'10px 16px', fontSize:'0.8rem', background:ACCENT, color:BG, flexShrink:0 }}
+                onClick={handleCustomStart}>Start</button>
+            </div>
+            {customPreview && !customErr && <div style={{ color:MUTED, fontSize:'0.68rem', marginTop:6 }}>{customPreview}</div>}
+            {customErr && <div style={{ color:'#f87171', fontSize:'0.72rem', marginTop:6 }}>{customErr}</div>}
+          </div>
+        </Overlay>
+      )}
+
+      {/* ══ LIVE EDIT: START ══ */}
+      {liveEdit === 'start' && (
+        <Overlay onClose={() => { setLiveEdit(null); setLiveErr(''); }}>
+          <div style={S.modalBox}>
+            <div style={S.modalTitle}>Change start time</div>
+            <form onSubmit={submitLiveStart}>
+              <Field label="Started at">
+                <input type="datetime-local" value={liveStartVal}
+                  onChange={e => { setLiveStartVal(e.target.value); setLiveErr(''); }}
+                  style={S.input} required />
+              </Field>
+              {liveErr && <div style={{ color:'#f87171', fontSize:'0.78rem', marginBottom:12 }}>{liveErr}</div>}
+              <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+                <button type="button" className="hov" style={S.ghostBtn} onClick={() => { setLiveEdit(null); setLiveErr(''); }}>Cancel</button>
+                <button type="submit" className="hov"
+                  style={{ ...S.pillBtn, padding:'10px 22px', fontSize:'0.85rem', background:ACCENT, color:BG }}>Save</button>
               </div>
             </form>
           </div>
-        </div>
+        </Overlay>
       )}
 
-      {deleteOpen && (
-        <div style={styles.overlay} onClick={(e) => e.target === e.currentTarget && setDeleteOpen(false)}>
-          <div style={styles.modal}>
-            <div style={styles.modalHeader}>Confirm delete</div>
-            <p style={styles.confirmText}>Delete this fast entry forever?</p>
-            <div style={styles.modalActions}>
-              <button type="button" style={styles.simpleButton} onClick={() => setDeleteOpen(false)}>Cancel</button>
-              <button type="button" style={styles.deleteButton} onClick={executeDelete}>Delete</button>
+      {/* ══ LIVE EDIT: GOAL ══ */}
+      {liveEdit === 'goal' && (
+        <Overlay onClose={() => { setLiveEdit(null); setLiveErr(''); }}>
+          <div style={{ ...S.modalBox, maxHeight:'88vh', overflowY:'auto' }}>
+            <div style={S.modalTitle}>Change goal</div>
+            <SectionLabel>Quick presets</SectionLabel>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, marginBottom:16 }}>
+              {[16,18,20,24,36,48,72,96,120,168].map(h => (
+                <button key={h} className="hov"
+                  style={{ border:`1px solid ${active?.goalHours === h ? ACCENT : '#1e1e1e'}`,
+                    background: active?.goalHours === h ? `${ACCENT}18` : '#141414',
+                    color: active?.goalHours === h ? ACCENT : TEXT,
+                    borderRadius:12, padding:'10px 6px', cursor:'pointer', textAlign:'center' }}
+                  onClick={() => applyLiveGoal(h)}
+                >
+                  <div style={{ fontSize:'0.85rem', fontWeight:700 }}>{h}h</div>
+                  {h >= 24 && <div style={{ color:MUTED, fontSize:'0.6rem', marginTop:2 }}>{fmtHoursLabel(h)}</div>}
+                </button>
+              ))}
+            </div>
+            <SectionLabel>Custom</SectionLabel>
+            <UnitToggle value={liveGoalUnit} onChange={u => { setLiveGoalUnit(u); setLiveGoalVal(''); setLiveErr(''); }} />
+            <div style={{ display:'flex', gap:8, marginTop:8 }}>
+              <input type="number" min="1" max={liveGoalUnit==='days'?7:168} step={liveGoalUnit==='days'?.5:1}
+                placeholder={liveGoalUnit==='days'?'e.g. 2':'e.g. 36'} value={liveGoalVal}
+                onChange={e => { setLiveGoalVal(e.target.value); setLiveErr(''); }}
+                style={{ ...S.input, flex:1 }} />
+              <button className="hov"
+                style={{ ...S.pillBtn, padding:'10px 16px', fontSize:'0.8rem', background:ACCENT, color:BG, flexShrink:0 }}
+                onClick={submitLiveGoalCustom}>Apply</button>
+            </div>
+            {liveGoalPreview && !liveErr && <div style={{ color:MUTED, fontSize:'0.68rem', marginTop:6 }}>{liveGoalPreview}</div>}
+            {liveErr && <div style={{ color:'#f87171', fontSize:'0.72rem', marginTop:6 }}>{liveErr}</div>}
+          </div>
+        </Overlay>
+      )}
+
+      {/* ══ PROFILE MODAL ══ */}
+      {profileOpen && (
+        <Overlay onClose={() => setProfileOpen(false)}>
+          <div style={S.modalBox}>
+            <div style={S.modalTitle}>Body stats</div>
+            <p style={{ color:MUTED, fontSize:'0.72rem', marginBottom:18, lineHeight:1.75 }}>
+              Estimates calories burned &amp; fat equivalent. Stored locally only.
+            </p>
+            <Field label="Gender">
+              <select value={profileForm.gender}
+                onChange={e => setProfileForm(p => ({ ...p, gender: e.target.value }))}
+                style={{ ...S.input, appearance:'none' }}>
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+                <option value="other">Other / Prefer not to say</option>
+              </select>
+            </Field>
+            <Field label="Age (years)">
+              <input type="number" min="1" max="120" value={profileForm.age} style={S.input}
+                onChange={e => setProfileForm(p => ({ ...p, age: e.target.value }))} />
+            </Field>
+            <Field label="Weight (kg)">
+              <input type="number" min="1" max="500" step="0.1" value={profileForm.weight} style={S.input}
+                onChange={e => setProfileForm(p => ({ ...p, weight: e.target.value }))} />
+            </Field>
+            <Field label="Height (cm)">
+              <input type="number" min="50" max="300" value={profileForm.height} style={S.input}
+                onChange={e => setProfileForm(p => ({ ...p, height: e.target.value }))} />
+            </Field>
+            {(() => {
+              const b = calcBMR(profileForm.gender, profileForm.age, profileForm.weight, profileForm.height);
+              if (!b) return null;
+              return (
+                <div style={{ background:'#0a0a0a', border:'1px solid #1e1e1e', borderRadius:14, padding:'14px 16px', marginBottom:18 }}>
+                  <div style={{ color:MUTED, fontSize:'0.52rem', letterSpacing:'0.14em', textTransform:'uppercase', marginBottom:10 }}>
+                    Estimates · Mifflin-St Jeor
+                  </div>
+                  <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8, marginBottom:10 }}>
+                    {[['BMR/day',`${Math.round(b)} kcal`],['16h',`~${Math.round(b/24*16)} kcal`],['24h',`~${Math.round(b)} kcal`],['3 days',`~${Math.round(b/24*72)} kcal`]].map(([lbl,val]) => (
+                      <div key={lbl} style={{ textAlign:'center' }}>
+                        <div style={{ color:MUTED, fontSize:'0.5rem', letterSpacing:'0.1em', marginBottom:4 }}>{lbl}</div>
+                        <div style={{ fontSize:'0.76rem', fontWeight:700 }}>{val}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ borderTop:'1px solid #1c1c1c', paddingTop:10 }}>
+                    <div style={{ color:MUTED, fontSize:'0.5rem', letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:8 }}>Fat equivalent</div>
+                    <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8 }}>
+                      {[['16h',16],['24h',24],['3 days',72],['7 days',168]].map(([lbl,h]) => (
+                        <div key={lbl} style={{ textAlign:'center' }}>
+                          <div style={{ color:MUTED, fontSize:'0.5rem', letterSpacing:'0.1em', marginBottom:4 }}>{lbl}</div>
+                          <div style={{ fontSize:'0.76rem', fontWeight:700, color:'#a78bfa' }}>{fmtFatMass(Math.round(b/24*h))}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+            <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+              <button className="hov" style={S.ghostBtn} onClick={() => setProfileOpen(false)}>Cancel</button>
+              <button className="hov"
+                style={{ ...S.pillBtn, padding:'10px 22px', fontSize:'0.85rem', background:ACCENT, color:BG }}
+                onClick={() => { localStorage.setItem(PROFILE_KEY, JSON.stringify(profileForm)); setProfile(profileForm); setProfileOpen(false); }}>
+                Save
+              </button>
             </div>
           </div>
-        </div>
+        </Overlay>
+      )}
+
+      {/* ══ EDIT LOG ══ */}
+      {editModal !== null && (
+        <Overlay onClose={closeEdit}>
+          <div style={S.modalBox}>
+            <div style={S.modalTitle}>Edit fast</div>
+            <form onSubmit={submitEdit}>
+              <Field label="Start"><input type="datetime-local" value={editForm.start} style={S.input} required onChange={e => setEditForm(p => ({ ...p, start: e.target.value }))} /></Field>
+              <Field label="End"><input type="datetime-local" value={editForm.end} style={S.input} required onChange={e => setEditForm(p => ({ ...p, end: e.target.value }))} /></Field>
+              <Field label="Goal hours"><input type="number" min="1" max="168" value={editForm.goalHours} style={S.input} onChange={e => setEditForm(p => ({ ...p, goalHours: e.target.value }))} /></Field>
+              <Field label="Note"><input type="text" value={editForm.note} placeholder="Optional" style={S.input} onChange={e => setEditForm(p => ({ ...p, note: e.target.value }))} /></Field>
+              {editErr && <div style={{ color:'#f87171', fontSize:'0.8rem', marginBottom:12 }}>{editErr}</div>}
+              <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+                <button type="button" className="hov" style={S.ghostBtn} onClick={closeEdit}>Cancel</button>
+                <button type="submit" className="hov" style={{ ...S.pillBtn, padding:'10px 22px', fontSize:'0.85rem', background:ACCENT, color:BG }}>Save</button>
+              </div>
+            </form>
+          </div>
+        </Overlay>
+      )}
+
+      {/* ══ DELETE ══ */}
+      {delTarget !== null && (
+        <Overlay onClose={() => setDelTarget(null)}>
+          <div style={S.modalBox}>
+            <div style={S.modalTitle}>Delete fast?</div>
+            <p style={{ color:MUTED, fontSize:'0.86rem', marginBottom:22, lineHeight:1.65 }}>This will permanently remove the entry.</p>
+            <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+              <button className="hov" style={S.ghostBtn} onClick={() => setDelTarget(null)}>Cancel</button>
+              <button className="hov" style={{ ...S.ghostBtn, color:'#f87171', borderColor:'#4a0000' }}
+                onClick={() => { setLogs(prev => prev.filter(l => l.id !== delTarget)); setDelTarget(null); }}>Delete</button>
+            </div>
+          </div>
+        </Overlay>
       )}
     </div>
   );
 }
 
-const styles = {
-  page: {
-    minHeight: '100vh',
-    background: '#0a0a0a',
-    color: text,
-    fontFamily: "'IBM Plex Mono', monospace",
-    padding: '24px',
-  },
-  container: {
-    maxWidth: '1100px',
-    margin: '0 auto',
-  },
-  header: {
-    marginBottom: '24px',
-  },
-  titleRow: {
-    display: 'flex',
-    alignItems: 'baseline',
-    gap: '8px',
-    marginBottom: '8px',
-  },
-  title: {
-    fontSize: '3rem',
-    letterSpacing: '0.08em',
-    fontWeight: 700,
-  },
-  dot: {
-    color: accent,
-    fontSize: '3rem',
-  },
-  subtitle: {
-    color: muted,
-    textTransform: 'uppercase',
-    fontSize: '0.9rem',
-    letterSpacing: '0.2em',
-  },
-  section: {
-    background: panel,
-    border: '1px solid #1c1c1c',
-    borderRadius: '18px',
-    padding: '20px',
-    marginBottom: '20px',
-  },
-  sectionHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: '16px',
-    marginBottom: '18px',
-    flexWrap: 'wrap',
-  },
-  sectionTitle: {
-    fontSize: '1rem',
-    color: text,
-    fontWeight: 600,
-  },
-  sectionMeta: {
-    color: muted,
-    fontSize: '0.9rem',
-    marginTop: '4px',
-  },
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
-    gap: '12px',
-  },
-  quickButton: {
-    border: '1px solid #262626',
-    background: '#111111',
-    color: text,
-    padding: '16px 12px',
-    fontSize: '0.95rem',
-    cursor: 'pointer',
-    borderRadius: '14px',
-    transition: 'transform 0.15s ease, opacity 0.15s ease',
-  },
-  simpleButton: {
-    border: '1px solid #2f2f2f',
-    background: '#0f0f0f',
-    color: text,
-    padding: '12px 16px',
-    cursor: 'pointer',
-    borderRadius: '14px',
-    letterSpacing: '0.08em',
-  },
-  primaryButton: {
-    border: 'none',
-    background: accent,
-    color: '#0a0a0a',
-    padding: '12px 18px',
-    cursor: 'pointer',
-    borderRadius: '14px',
-    fontWeight: 700,
-  },
-  stopButton: {
-    border: 'none',
-    background: accent,
-    color: '#0a0a0a',
-    padding: '14px 22px',
-    cursor: 'pointer',
-    borderRadius: '16px',
-    fontWeight: 700,
-    marginTop: '18px',
-  },
-  deleteButton: {
-    border: '1px solid #520000',
-    background: '#210000',
-    color: '#ff9b9b',
-    padding: '10px 14px',
-    cursor: 'pointer',
-    borderRadius: '14px',
-  },
-  activeSection: {
-    padding: '24px',
-  },
-  activeCard: {
-    border: `1px solid ${accent}`,
-    borderRadius: '22px',
-    padding: '24px',
-    background: '#111111',
-    display: 'grid',
-    gap: '12px',
-  },
-  activeHeading: {
-    color: accent,
-    letterSpacing: '0.18em',
-    fontSize: '0.9rem',
-    textTransform: 'uppercase',
-  },
-  activeTime: {
-    fontSize: '3rem',
-    fontWeight: 700,
-  },
-  activeRange: {
-    color: muted,
-    fontSize: '0.95rem',
-  },
-  activeNote: {
-    color: text,
-    opacity: 0.9,
-    fontSize: '0.95rem',
-    marginTop: '6px',
-  },
-  statsRow: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-    gap: '14px',
-  },
-  statCard: {
-    background: '#101010',
-    border: '1px solid #1d1d1d',
-    borderRadius: '18px',
-    padding: '18px',
-    minHeight: '100px',
-  },
-  statLabel: {
-    color: muted,
-    fontSize: '0.8rem',
-    textTransform: 'uppercase',
-    letterSpacing: '0.16em',
-  },
-  statValue: {
-    marginTop: '10px',
-    fontSize: '1.55rem',
-    fontWeight: 700,
-  },
-  tableHeader: {
-    display: 'grid',
-    gridTemplateColumns: '2.5fr 1fr 1.5fr 1fr',
-    gap: '12px',
-    color: muted,
-    fontSize: '0.8rem',
-    textTransform: 'uppercase',
-    letterSpacing: '0.16em',
-    marginBottom: '12px',
-  },
-  tableCellWide: {
-    display: 'grid',
-    gap: '4px',
-  },
-  tableCell: {
-    color: text,
-    fontSize: '0.95rem',
-  },
-  tableCellActions: {
-    display: 'flex',
-    gap: '10px',
-    justifyContent: 'flex-end',
-    flexWrap: 'wrap',
-  },
-  historyRow: {
-    display: 'grid',
-    gridTemplateColumns: '2.5fr 1fr 1.5fr 1fr',
-    gap: '12px',
-    padding: '16px 0',
-    borderTop: '1px solid #161616',
-    alignItems: 'center',
-  },
-  smallText: {
-    color: muted,
-    fontSize: '0.82rem',
-  },
-  actionButton: {
-    border: '1px solid #333',
-    background: '#0f0f0f',
-    color: text,
-    padding: '8px 12px',
-    cursor: 'pointer',
-    borderRadius: '12px',
-  },
-  emptyState: {
-    color: muted,
-    padding: '18px 0',
-  },
-  overlay: {
-    position: 'fixed',
-    inset: 0,
-    background: 'rgba(10,10,10,0.85)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: '24px',
-    zIndex: 50,
-  },
-  modal: {
-    width: '100%',
-    maxWidth: '520px',
-    background: '#101010',
-    border: '1px solid #1d1d1d',
-    borderRadius: '22px',
-    padding: '28px',
-    boxShadow: '0 18px 50px rgba(0,0,0,0.35)',
-  },
-  modalHeader: {
-    fontSize: '1.15rem',
-    fontWeight: 700,
-    marginBottom: '18px',
-  },
-  fieldGroup: {
-    display: 'grid',
-    gap: '8px',
-    marginBottom: '16px',
-  },
-  label: {
-    color: muted,
-    fontSize: '0.82rem',
-    letterSpacing: '0.08em',
-    textTransform: 'uppercase',
-  },
-  input: {
-    border: '1px solid #252525',
-    background: '#111111',
-    color: text,
-    padding: '12px 14px',
-    borderRadius: '14px',
-    fontFamily: "'IBM Plex Mono', monospace",
-    fontSize: '0.95rem',
-    outline: 'none',
-  },
-  presetBar: {
-    display: 'flex',
-    gap: '10px',
-    flexWrap: 'wrap',
-    marginBottom: '20px',
-  },
-  formError: {
-    color: '#ff7676',
-    marginBottom: '16px',
-    fontSize: '0.9rem',
-  },
-  presetButton: {
-    border: '1px solid #282828',
-    background: '#111111',
-    color: text,
-    padding: '10px 14px',
-    borderRadius: '14px',
-    cursor: 'pointer',
-  },
-  modalActions: {
-    display: 'flex',
-    justifyContent: 'flex-end',
-    gap: '12px',
-    flexWrap: 'wrap',
-  },
-  confirmText: {
-    color: text,
-    marginBottom: '22px',
-    lineHeight: 1.6,
-  },
+// ── Shared components ──────────────────────────────────────────────────────
+function Overlay({ children, onClose }) {
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.85)', display:'flex',
+      alignItems:'center', justifyContent:'center', padding:20, zIndex:100 }}
+      onClick={e => e.target === e.currentTarget && onClose()}>
+      {children}
+    </div>
+  );
+}
+function Field({ label, children }) {
+  return (
+    <div style={{ marginBottom:14 }}>
+      <label style={{ display:'block', color:MUTED, fontSize:'0.6rem', textTransform:'uppercase', letterSpacing:'0.16em', marginBottom:6 }}>{label}</label>
+      {children}
+    </div>
+  );
+}
+function SectionLabel({ children }) {
+  return <div style={{ color:MUTED, fontSize:'0.56rem', letterSpacing:'0.2em', textTransform:'uppercase', marginBottom:8 }}>{children}</div>;
+}
+function UnitToggle({ value, onChange }) {
+  return (
+    <div style={{ display:'flex', gap:6 }}>
+      {['hours','days'].map(u => (
+        <button key={u}
+          style={{ border:`1px solid ${value===u ? ACCENT : '#1e1e1e'}`,
+            background: value===u ? `${ACCENT}1a` : 'transparent',
+            color: value===u ? ACCENT : MUTED,
+            borderRadius:8, padding:'5px 14px', fontSize:'0.68rem', cursor:'pointer',
+            textTransform:'uppercase', letterSpacing:'0.1em' }}
+          onClick={() => onChange(u)}>{u}</button>
+      ))}
+    </div>
+  );
+}
+
+// ── Styles ─────────────────────────────────────────────────────────────────
+const S = {
+  pillBtn:  { border:'none', borderRadius:999, padding:'14px 40px', fontSize:'0.88rem', fontWeight:700, letterSpacing:'0.12em', cursor:'pointer' },
+  ghostBtn: { border:'1px solid #242424', background:'transparent', color:TEXT, borderRadius:12, padding:'10px 16px', fontSize:'0.8rem', cursor:'pointer' },
+  iconBtn:  { border:'1px solid #1e1e1e', background:'transparent', color:MUTED, borderRadius:10, padding:'6px 10px', fontSize:'0.88rem', cursor:'pointer' },
+  linkBtn:  { border:'none', background:'transparent', color:ACCENT, fontSize:'0.62rem', cursor:'pointer', textDecoration:'underline', padding:0, display:'block' },
+  input:    { width:'100%', border:'1px solid #222', background:'#0a0a0a', color:TEXT, borderRadius:12, padding:'10px 12px', fontSize:'0.84rem', outline:'none' },
+  modalBox: { width:'100%', maxWidth:480, background:'#0f0f0f', border:'1px solid #1c1c1c', borderRadius:22, padding:'24px 20px', boxShadow:'0 28px 70px rgba(0,0,0,0.7)' },
+  modalTitle: { fontSize:'0.95rem', fontWeight:700, letterSpacing:'0.1em', marginBottom:18 },
 };
