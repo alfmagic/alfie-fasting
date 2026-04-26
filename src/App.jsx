@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const STORAGE_KEY = 'fasting-logs';
 const accent = '#ff6b1a';
@@ -81,6 +81,14 @@ export default function App() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [form, setForm] = useState({ start: '', end: '', note: '' });
   const [editId, setEditId] = useState(null);
+  const [formError, setFormError] = useState('');
+  const initialized = useRef(false);
+
+  const saveAll = useCallback(async (completed, active) => {
+    const payload = [...completed];
+    if (active) payload.unshift(active);
+    await storage.current.set(STORAGE_KEY, payload);
+  }, []);
 
   useEffect(() => {
     const load = async () => {
@@ -99,13 +107,16 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  const saveAll = async (completed, active) => {
-    const payload = [...completed];
-    if (active) payload.unshift(active);
-    await storage.current.set(STORAGE_KEY, payload);
-  };
+  useEffect(() => {
+    if (!initialized.current) {
+      initialized.current = true;
+      return;
+    }
+    saveAll(completedLogs, activeLog);
+  }, [completedLogs, activeLog, saveAll]);
 
   const startQuickFast = (hours) => {
+    if (activeLog) return;
     const start = new Date(Date.now() - hours * 3600 * 1000).toISOString();
     const active = { id: Date.now(), start, end: null, note: `${hours}h quick start` };
     setActiveLog(active);
@@ -123,17 +134,20 @@ export default function App() {
 
   const openNewLog = () => {
     setEditId(null);
+    setFormError('');
     setForm({ start: toLocalInputValue(new Date().toISOString()), end: toLocalInputValue(new Date().toISOString()), note: '' });
     setModalOpen(true);
   };
 
   const openEditLog = (log) => {
     setEditId(log.id);
+    setFormError('');
     setForm({ start: toLocalInputValue(log.start), end: toLocalInputValue(log.end), note: log.note || '' });
     setModalOpen(true);
   };
 
   const handleFormChange = (field, value) => {
+    setFormError('');
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
@@ -145,14 +159,24 @@ export default function App() {
 
   const submitLog = async (event) => {
     event.preventDefault();
-    const start = new Date(form.start).toISOString();
-    const end = new Date(form.end).toISOString();
-    if (new Date(start) >= new Date(end)) return;
-    const entry = { id: editId ?? Date.now(), start, end, note: form.note.trim() };
-    const updated = editId ? completedLogs.map((item) => (item.id === editId ? entry : item)) : [entry, ...completedLogs];
+    const start = new Date(form.start);
+    const end = new Date(form.end);
+
+    if (!form.start || !form.end || start >= end) {
+      setFormError('Please choose a valid start and end time. End must be after start.');
+      return;
+    }
+
+    const entry = { id: editId ?? Date.now(), start: start.toISOString(), end: end.toISOString(), note: form.note.trim() };
+    const updated = editId
+      ? completedLogs.map((item) => (item.id === editId ? entry : item))
+      : [entry, ...completedLogs];
+
+    updated.sort((a, b) => new Date(b.start) - new Date(a.start));
     setCompletedLogs(updated);
     setModalOpen(false);
     setEditId(null);
+    setFormError('');
     await saveAll(updated, activeLog);
   };
 
@@ -170,14 +194,24 @@ export default function App() {
     await saveAll(updated, activeLog);
   };
 
-  const totalFasts = completedLogs.length;
-  const totalDuration = completedLogs.reduce((sum, log) => sum + (new Date(log.end) - new Date(log.start)), 0);
-  const averageDuration = totalFasts ? formatDuration(totalDuration / totalFasts) : '0h 00m';
-  const longest = totalFasts
-    ? formatDuration(Math.max(...completedLogs.map((log) => new Date(log.end) - new Date(log.start))))
-    : '0h 00m';
+  const stats = useMemo(() => {
+    const totalFasts = completedLogs.length;
+    const totalDuration = completedLogs.reduce((sum, log) => sum + (new Date(log.end) - new Date(log.start)), 0);
+    const averageDuration = totalFasts ? formatDuration(totalDuration / totalFasts) : '0h 00m';
+    const longest = totalFasts
+      ? formatDuration(Math.max(...completedLogs.map((log) => new Date(log.end) - new Date(log.start))))
+      : '0h 00m';
+
+    return {
+      totalFasts,
+      totalTime: formatDuration(totalDuration),
+      averageDuration,
+      longest,
+    };
+  }, [completedLogs]);
 
   const activeElapsed = activeLog ? Date.now() - new Date(activeLog.start).getTime() : 0;
+  const canStartQuick = !activeLog;
 
   return (
     <div style={styles.page}>
@@ -207,7 +241,17 @@ export default function App() {
             {['16:8', '18:6', '20:4', '24h', '36h', '48h'].map((label) => {
               const hours = Number(label.replace('h', '').split(':')[0]);
               return (
-                <button key={label} style={styles.quickButton} className="hover-fade" onClick={() => startQuickFast(hours)}>
+                <button
+                  key={label}
+                  style={{
+                    ...styles.quickButton,
+                    opacity: canStartQuick ? 1 : 0.45,
+                    cursor: canStartQuick ? 'pointer' : 'not-allowed',
+                  }}
+                  className="hover-fade"
+                  onClick={() => canStartQuick && startQuickFast(hours)}
+                  disabled={!canStartQuick}
+                >
                   {label}
                 </button>
               );
@@ -221,6 +265,7 @@ export default function App() {
               <div style={styles.activeHeading}>Active fast</div>
               <div style={styles.activeTime}>{formatDuration(activeElapsed)}</div>
               <div style={styles.activeRange}>{`${formatDate(activeLog.start)} · ${formatTime(activeLog.start)} → now`}</div>
+              {activeLog.note && <div style={styles.activeNote}>{activeLog.note}</div>}
               <button style={styles.stopButton} onClick={stopFast}>STOP NOW</button>
             </div>
           </section>
@@ -228,9 +273,10 @@ export default function App() {
 
         <section style={styles.section}>
           <div style={styles.statsRow}>
-            <Stat label="Total fasts" value={totalFasts} />
-            <Stat label="Average" value={averageDuration} />
-            <Stat label="Longest" value={longest} />
+            <Stat label="Total fasts" value={stats.totalFasts} />
+            <Stat label="Total time" value={stats.totalTime} />
+            <Stat label="Average" value={stats.averageDuration} />
+            <Stat label="Longest" value={stats.longest} />
           </div>
         </section>
 
@@ -264,7 +310,7 @@ export default function App() {
       </div>
 
       {modalOpen && (
-        <div style={styles.overlay}>
+        <div style={styles.overlay} onClick={(e) => e.target === e.currentTarget && setModalOpen(false)}>
           <div style={styles.modal}>
             <div style={styles.modalHeader}>{editId ? 'Edit fast log' : 'Log a past fast'}</div>
             <form onSubmit={submitLog}>
@@ -285,6 +331,7 @@ export default function App() {
                   <button key={hours} type="button" style={styles.presetButton} onClick={() => applyPreset(hours)}>{hours}h</button>
                 ))}
               </div>
+              {formError && <div style={styles.formError}>{formError}</div>}
               <div style={styles.modalActions}>
                 <button type="button" style={styles.simpleButton} onClick={() => setModalOpen(false)}>Cancel</button>
                 <button type="submit" style={styles.primaryButton}>{editId ? 'Save log' : 'Add log'}</button>
@@ -295,7 +342,7 @@ export default function App() {
       )}
 
       {deleteOpen && (
-        <div style={styles.overlay}>
+        <div style={styles.overlay} onClick={(e) => e.target === e.currentTarget && setDeleteOpen(false)}>
           <div style={styles.modal}>
             <div style={styles.modalHeader}>Confirm delete</div>
             <p style={styles.confirmText}>Delete this fast entry forever?</p>
@@ -447,6 +494,12 @@ const styles = {
     color: muted,
     fontSize: '0.95rem',
   },
+  activeNote: {
+    color: text,
+    opacity: 0.9,
+    fontSize: '0.95rem',
+    marginTop: '6px',
+  },
   statsRow: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
@@ -568,6 +621,11 @@ const styles = {
     gap: '10px',
     flexWrap: 'wrap',
     marginBottom: '20px',
+  },
+  formError: {
+    color: '#ff7676',
+    marginBottom: '16px',
+    fontSize: '0.9rem',
   },
   presetButton: {
     border: '1px solid #282828',

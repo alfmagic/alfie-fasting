@@ -14,4 +14,5 @@ npm run dev
 - Past fast logging modal with presets and note field
 - Stats bar for total fasts, average duration, and longest fast
 - History list with edit + delete management
+- Safer active-fast handling with quick-start button guard and overlay close support
 - Persistent storage via `window.storage.get/set` with fallback to `localStorage`
