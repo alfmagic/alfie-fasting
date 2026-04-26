@@ -34,6 +34,85 @@ const DAY_PRESETS = [
 
 const ACCENT_GOAL = '#22c55e'; // green — ring turns this color when goal is reached
 
+// ── Fasting milestones ─────────────────────────────────────────────────────
+const MILESTONES = [
+  {
+    hours: 4,
+    name: 'Fat Oxidation',
+    short: 'Glucose drops, fat burning begins',
+    color: '#f59e0b',
+    detail: 'Blood glucose and insulin levels fall after ~4 hours without food. The body shifts its primary fuel source from glucose to fatty acid oxidation, beginning the transition away from fed-state metabolism.',
+    sources: [
+      { label: 'Cahill GF Jr. (2006)', text: 'Fuel metabolism in starvation.', journal: 'Annual Review of Nutrition, 26, 1–22.' },
+    ],
+  },
+  {
+    hours: 8,
+    name: 'Glycogen Depletion',
+    short: 'Liver glycogen exhausted',
+    color: '#fb923c',
+    detail: 'Liver glycogen stores become fully depleted. The liver accelerates gluconeogenesis (making glucose from amino acids and glycerol) and ramps up ketone production to supply the brain with fuel.',
+    sources: [
+      { label: 'Cahill GF Jr. (2006)', text: 'Fuel metabolism in starvation.', journal: 'Annual Review of Nutrition, 26, 1–22.' },
+      { label: 'Gerich JE. (1993)', text: 'Control of glycaemia.', journal: 'Baillière\'s Clinical Endocrinology and Metabolism, 7(3), 551–586.' },
+    ],
+  },
+  {
+    hours: 12,
+    name: 'Ketosis',
+    short: 'Ketone bodies rise as primary fuel',
+    color: '#a78bfa',
+    detail: 'The metabolic switch from glucose to ketones is complete. β-hydroxybutyrate and acetoacetate rise measurably in the blood. Growth hormone surges, promoting fat mobilisation and muscle preservation.',
+    sources: [
+      { label: 'Anton SD et al. (2018)', text: 'Flipping the Metabolic Switch.', journal: 'Obesity, 26(2), 254–268.' },
+      { label: 'Owen OE et al. (1967)', text: 'Brain metabolism during fasting.', journal: 'Journal of Clinical Investigation, 46(10), 1589–1595.' },
+    ],
+  },
+  {
+    hours: 16,
+    name: 'Autophagy',
+    short: 'Cellular self-cleaning activates',
+    color: '#22d3ee',
+    detail: 'Autophagy — the process by which cells disassemble and recycle damaged components — is significantly upregulated. This cellular housekeeping removes dysfunctional proteins and organelles. Yoshinori Ohsumi was awarded the 2016 Nobel Prize in Physiology for discovering its mechanisms.',
+    sources: [
+      { label: 'Ohsumi Y. (2016)', text: 'Autophagy: An Intracellular Recycling System. Nobel Lecture.', journal: 'Nobel Prize in Physiology or Medicine.' },
+      { label: 'Alirezaei M et al. (2010)', text: 'Short-term fasting induces profound neuronal autophagy.', journal: 'Autophagy, 6(6), 702–710.' },
+    ],
+  },
+  {
+    hours: 24,
+    name: 'Deep Autophagy',
+    short: 'Peak cellular renewal + BDNF rise',
+    color: '#818cf8',
+    detail: 'Autophagy reaches peak intensity across most tissues. BDNF (brain-derived neurotrophic factor) increases, supporting neuroplasticity, mood, and cognition. The gut begins cellular renewal. Sirtuins (longevity-linked proteins) are activated.',
+    sources: [
+      { label: 'Longo VD & Mattson MP. (2014)', text: 'Fasting: Molecular Mechanisms and Clinical Applications.', journal: 'Cell Metabolism, 19(2), 181–192.' },
+      { label: 'Lee J et al. (2000)', text: 'Dietary restriction increases BDNF levels.', journal: 'Journal of Neurochemistry, 82(6), 1427–1435.' },
+    ],
+  },
+  {
+    hours: 48,
+    name: 'Immune Recycling',
+    short: 'Old immune cells broken down',
+    color: '#34d399',
+    detail: 'Prolonged fasting triggers a reduction in IGF-1 and PKA signalling, prompting the body to recycle aged and damaged immune cells via autophagy. This primes the immune system for regeneration when feeding resumes.',
+    sources: [
+      { label: 'Cheng CW et al. (2014)', text: 'Prolonged Fasting Reduces IGF-1/PKA to Promote Hematopoietic-Stem-Cell-Based Regeneration.', journal: 'Cell Stem Cell, 14(6), 810–823.' },
+    ],
+  },
+  {
+    hours: 72,
+    name: 'Stem Cell Activation',
+    short: 'Immune system regeneration',
+    color: '#f97316',
+    detail: 'Three days of fasting triggers significant haematopoietic stem cell activation. The immune system undergoes a form of regeneration — old cells are cleared and new immune cells are produced upon refeeding. This is one of the most dramatic effects of extended fasting.',
+    sources: [
+      { label: 'Cheng CW et al. (2014)', text: 'Cell Stem Cell, 14(6), 810–823.', journal: 'Ibid.' },
+      { label: 'Brandhorst S et al. (2015)', text: 'A Periodic Diet that Mimics Fasting Promotes Multi-System Regeneration.', journal: 'Cell Metabolism, 22(1), 86–99.' },
+    ],
+  },
+];
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 function fmtHHMMSS(ms) {
   if (ms < 0) ms = 0;
@@ -133,6 +212,8 @@ export default function App() {
   const [editForm,  setEditForm]  = useState({ start:'', end:'', goalHours:'', note:'' });
   const [editErr,   setEditErr]   = useState('');
   const [delTarget, setDelTarget] = useState(null);
+  const [scienceOpen,       setScienceOpen]       = useState(false);
+  const [selectedMilestone, setSelectedMilestone] = useState(null);
 
   const initialized = useRef(false);
 
@@ -409,6 +490,27 @@ export default function App() {
                   transform={`rotate(-90 ${CX} ${CY})`}
                   style={{ transition:'stroke-dashoffset .8s ease, stroke .6s ease' }} />
               )}
+              {/* Milestone markers */}
+              {active && MILESTONES.map(m => {
+                if (m.hours > active.goalHours) return null;
+                const mp     = m.hours / active.goalHours;
+                const angle  = mp * 2 * Math.PI - Math.PI / 2;
+                const passed = elapsed >= m.hours * 3_600_000;
+                const mx     = CX + R * Math.cos(angle);
+                const my     = CY + R * Math.sin(angle);
+                // outer label dot
+                const lx = CX + (R + 22) * Math.cos(angle);
+                const ly = CY + (R + 22) * Math.sin(angle);
+                return (
+                  <g key={m.hours}>
+                    <circle cx={mx} cy={my} r={5} fill={passed ? m.color : '#1a1a1a'}
+                      stroke={m.color} strokeWidth={1.5}
+                      style={{ transition:'fill .4s ease', filter: passed ? `drop-shadow(0 0 5px ${m.color}88)` : 'none', cursor:'pointer' }}
+                      onClick={() => setSelectedMilestone(m)} />
+                    <circle cx={lx} cy={ly} r={2.5} fill={passed ? m.color : m.color + '44'} />
+                  </g>
+                );
+              })}
               {/* Tip dot */}
               {active && progress > 0.005 && (
                 <circle cx={tip.x} cy={tip.y} r={goalReached ? 0 : 6} fill="white"
@@ -588,6 +690,67 @@ export default function App() {
                 );
               })
           }
+        </div>
+
+        {/* ── SCIENCE PANEL ── */}
+        <div style={{ background:PANEL, border:'1px solid #171717', borderRadius:18, overflow:'hidden' }}>
+          {/* Header row */}
+          <div
+            className="tap"
+            style={{ display:'flex', alignItems:'center', justifyContent:'space-between',
+              padding:'16px 18px', cursor:'pointer' }}
+            onClick={() => setScienceOpen(o => !o)}
+          >
+            <div>
+              <div style={{ fontSize:'0.54rem', color:MUTED, letterSpacing:'0.22em', textTransform:'uppercase', marginBottom:4 }}>
+                Fasting Science
+              </div>
+              <div style={{ fontSize:'0.78rem', color:TEXT }}>Milestones &amp; research</div>
+            </div>
+            <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+              {/* Mini milestone dots preview */}
+              <div style={{ display:'flex', gap:5 }}>
+                {MILESTONES.map(m => (
+                  <div key={m.hours} style={{ width:7, height:7, borderRadius:'50%', background: m.color + '99' }} />
+                ))}
+              </div>
+              <span style={{ color:MUTED, fontSize:'0.8rem' }}>{scienceOpen ? '▲' : '▼'}</span>
+            </div>
+          </div>
+
+          {/* Milestone cards */}
+          {scienceOpen && (
+            <div style={{ padding:'0 14px 16px' }}>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:9 }}>
+                {MILESTONES.map(m => {
+                  const passed = active && elapsed >= m.hours * 3_600_000;
+                  return (
+                    <div
+                      key={m.hours}
+                      className="hov"
+                      style={{ background: m.color + '10', border:`1px solid ${m.color}${passed ? 'aa' : '33'}`,
+                        borderRadius:14, padding:'12px 12px', cursor:'pointer',
+                        opacity: passed ? 1 : 0.65 }}
+                      onClick={() => setSelectedMilestone(m)}
+                    >
+                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:6 }}>
+                        <span style={{ fontSize:'0.58rem', color: m.color, letterSpacing:'0.12em',
+                          textTransform:'uppercase', fontWeight:600 }}>{m.name}</span>
+                        {passed && <span style={{ fontSize:'0.55rem', color: m.color }}>✓</span>}
+                      </div>
+                      <div style={{ fontSize:'1.2rem', fontWeight:700, color: m.color, lineHeight:1, marginBottom:5 }}>
+                        {m.hours}h
+                      </div>
+                      <div style={{ fontSize:'0.65rem', color:MUTED, lineHeight:1.5 }}>{m.short}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ color:MUTED, fontSize:'0.58rem', marginTop:12, textAlign:'center', letterSpacing:'0.06em' }}>
+                Tap any card to read the research
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -796,6 +959,54 @@ export default function App() {
                 <button type="submit" className="hov" style={{ ...S.pillBtn, padding:'10px 22px', fontSize:'0.85rem', background:ACCENT, color:BG }}>Save</button>
               </div>
             </form>
+          </div>
+        </Overlay>
+      )}
+
+      {/* ══ MILESTONE DETAIL ══ */}
+      {selectedMilestone && (
+        <Overlay onClose={() => setSelectedMilestone(null)}>
+          <div style={{ ...S.modalBox, maxHeight:'88vh', overflowY:'auto' }}>
+            {/* Colour band header */}
+            <div style={{ background: selectedMilestone.color + '18',
+              border:`1px solid ${selectedMilestone.color}44`, borderRadius:14,
+              padding:'16px', marginBottom:20 }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
+                <span style={{ fontSize:'0.6rem', color: selectedMilestone.color,
+                  letterSpacing:'0.16em', textTransform:'uppercase', fontWeight:600 }}>
+                  {selectedMilestone.name}
+                </span>
+                <span style={{ fontSize:'1.6rem', fontWeight:700, color: selectedMilestone.color,
+                  lineHeight:1 }}>{selectedMilestone.hours}h</span>
+              </div>
+              <div style={{ fontSize:'0.82rem', color:TEXT, lineHeight:1.5 }}>{selectedMilestone.short}</div>
+            </div>
+
+            {/* Mechanism */}
+            <div style={{ fontSize:'0.56rem', color:MUTED, letterSpacing:'0.16em',
+              textTransform:'uppercase', marginBottom:8 }}>What's happening</div>
+            <p style={{ fontSize:'0.82rem', color:TEXT, lineHeight:1.75, marginBottom:22 }}>
+              {selectedMilestone.detail}
+            </p>
+
+            {/* Sources */}
+            <div style={{ fontSize:'0.56rem', color:MUTED, letterSpacing:'0.16em',
+              textTransform:'uppercase', marginBottom:10 }}>Research sources</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:10, marginBottom:22 }}>
+              {selectedMilestone.sources.map((s, i) => (
+                <div key={i} style={{ background:'#0a0a0a', border:'1px solid #1c1c1c',
+                  borderRadius:12, padding:'12px 14px' }}>
+                  <div style={{ fontSize:'0.72rem', fontWeight:600, color: selectedMilestone.color,
+                    marginBottom:4 }}>{s.label}</div>
+                  <div style={{ fontSize:'0.72rem', color:TEXT, lineHeight:1.55 }}>{s.text}</div>
+                  <div style={{ fontSize:'0.66rem', color:MUTED, marginTop:3, fontStyle:'italic' }}>{s.journal}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display:'flex', justifyContent:'flex-end' }}>
+              <button className="hov" style={S.ghostBtn} onClick={() => setSelectedMilestone(null)}>Close</button>
+            </div>
           </div>
         </Overlay>
       )}
