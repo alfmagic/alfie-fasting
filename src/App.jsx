@@ -175,7 +175,11 @@ export default function App() {
       const de = new Date(ds.getTime() + 86_400_000);
       return {
         day,
-        hasFast: all.some(l => { const s = new Date(l.start); return s >= ds && s < de; }),
+        hasFast: all.some(l => {
+          const s = new Date(l.start);
+          const e = l.end ? new Date(l.end) : new Date(now);
+          return s < de && e >= ds; // fast overlaps this calendar day
+        }),
         isToday: today.toDateString() === ds.toDateString(),
       };
     });
@@ -414,34 +418,37 @@ export default function App() {
 
             {/* Center content overlay */}
             <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column',
-              alignItems:'center', justifyContent:'center', gap:0 }}>
+              alignItems:'center', justifyContent:'center', textAlign:'center', gap:0 }}>
 
               {/* Timer — click to toggle elapsed ↔ remaining */}
               <div
                 onClick={() => active && setCenterMode(m => m === 'elapsed' ? 'remaining' : 'elapsed')}
-                style={{ cursor: active ? 'pointer' : 'default', textAlign:'center', userSelect:'none' }}
+                style={{ cursor: active ? 'pointer' : 'default', userSelect:'none', width:'100%' }}
                 title={active ? 'Click to toggle elapsed / remaining' : undefined}
               >
                 {/* h m s display */}
-                <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'center', gap:1, lineHeight:1 }}>
+                <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'center', gap:0, lineHeight:1 }}>
                   {[
                     [String(tParts.h).padStart(2,'0'), 'h'],
                     [String(tParts.m).padStart(2,'0'), 'm'],
                     [String(tParts.s).padStart(2,'0'), 's'],
                   ].map(([num, unit], i) => (
-                    <span key={unit} style={{ display:'flex', alignItems:'flex-end', marginRight: i < 2 ? 4 : 0 }}>
-                      <span style={{ fontSize:'1.65rem', fontWeight:700, letterSpacing:'-0.01em', color: goalReached ? ACCENT_GOAL : TEXT }}>
+                    <span key={unit} style={{ display:'flex', alignItems:'flex-end', marginRight: i < 2 ? 6 : 0 }}>
+                      <span style={{ fontSize:'1.95rem', fontWeight:700, letterSpacing:'-0.02em',
+                        color: goalReached ? ACCENT_GOAL : '#ffffff',
+                        textShadow: goalReached ? `0 0 20px ${ACCENT_GOAL}88` : '0 0 12px rgba(255,255,255,0.15)' }}>
                         {num}
                       </span>
-                      <span style={{ fontSize:'0.58rem', color:MUTED, marginBottom:3, marginLeft:1 }}>{unit}</span>
+                      <span style={{ fontSize:'0.6rem', color: goalReached ? ACCENT_GOAL : ACCENT,
+                        marginBottom:4, marginLeft:2, letterSpacing:'0.04em' }}>{unit}</span>
                     </span>
                   ))}
                 </div>
 
-                {/* Mode label */}
+                {/* Mode label — same accent color for both modes */}
                 {active && (
-                  <div style={{ fontSize:'0.55rem', color: centerMode === 'elapsed' ? MUTED : arcColor,
-                    letterSpacing:'0.18em', textTransform:'uppercase', marginTop:6, transition:'color .3s' }}>
+                  <div style={{ fontSize:'0.55rem', color: goalReached ? ACCENT_GOAL : ACCENT,
+                    letterSpacing:'0.18em', textTransform:'uppercase', marginTop:7, transition:'color .3s' }}>
                     {goalReached
                       ? 'goal reached! ⇅'
                       : centerMode === 'elapsed'
