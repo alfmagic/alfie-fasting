@@ -464,12 +464,12 @@ export default function App() {
                   className="tap"
                   onClick={openLiveGoal}
                   style={{ marginTop:10, padding:'4px 12px', borderRadius:999,
-                    border:`1px solid ${goalReached ? ACCENT_GOAL+'55' : '#222'}`,
-                    background: goalReached ? ACCENT_GOAL+'18' : '#111',
+                    border:`1px solid ${goalReached ? ACCENT_GOAL+'55' : ACCENT+'44'}`,
+                    background: goalReached ? ACCENT_GOAL+'18' : ACCENT+'12',
                     cursor:'pointer', userSelect:'none' }}
                   title="Click to change goal"
                 >
-                  <span style={{ fontSize:'0.6rem', color: goalReached ? ACCENT_GOAL : MUTED,
+                  <span style={{ fontSize:'0.6rem', color: goalReached ? ACCENT_GOAL : ACCENT,
                     letterSpacing:'0.14em', textTransform:'uppercase' }}>
                     {`${active.goalHours}h · ${fmtHoursLabel(active.goalHours)} ✎`}
                   </span>
