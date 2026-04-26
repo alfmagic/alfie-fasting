@@ -35,22 +35,20 @@ const DAY_PRESETS = [
 const ACCENT_GOAL = '#22c55e'; // green — ring turns this color when goal is reached
 
 // ── Fasting milestones ─────────────────────────────────────────────────────
+// All ring markers use one unified color (ACCENT). Card color is only for
+// the science panel backgrounds — distinct from the arc so nothing blends.
 const MILESTONES = [
   {
-    hours: 4,
-    name: 'Fat Oxidation',
+    hours: 4,  icon: '⚡', name: 'Fat Oxidation',      cardColor: '#d97706',
     short: 'Glucose drops, fat burning begins',
-    color: '#f59e0b',
     detail: 'Blood glucose and insulin levels fall after ~4 hours without food. The body shifts its primary fuel source from glucose to fatty acid oxidation, beginning the transition away from fed-state metabolism.',
     sources: [
       { label: 'Cahill GF Jr. (2006)', text: 'Fuel metabolism in starvation.', journal: 'Annual Review of Nutrition, 26, 1–22.' },
     ],
   },
   {
-    hours: 8,
-    name: 'Glycogen Depletion',
-    short: 'Liver glycogen exhausted',
-    color: '#fb923c',
+    hours: 8,  icon: '📉', name: 'Glycogen Depletion', cardColor: '#b45309',
+    short: 'Liver glycogen exhausted, ketones rising',
     detail: 'Liver glycogen stores become fully depleted. The liver accelerates gluconeogenesis (making glucose from amino acids and glycerol) and ramps up ketone production to supply the brain with fuel.',
     sources: [
       { label: 'Cahill GF Jr. (2006)', text: 'Fuel metabolism in starvation.', journal: 'Annual Review of Nutrition, 26, 1–22.' },
@@ -58,10 +56,8 @@ const MILESTONES = [
     ],
   },
   {
-    hours: 12,
-    name: 'Ketosis',
+    hours: 12, icon: '🔑', name: 'Ketosis',            cardColor: '#7c3aed',
     short: 'Ketone bodies rise as primary fuel',
-    color: '#a78bfa',
     detail: 'The metabolic switch from glucose to ketones is complete. β-hydroxybutyrate and acetoacetate rise measurably in the blood. Growth hormone surges, promoting fat mobilisation and muscle preservation.',
     sources: [
       { label: 'Anton SD et al. (2018)', text: 'Flipping the Metabolic Switch.', journal: 'Obesity, 26(2), 254–268.' },
@@ -69,10 +65,8 @@ const MILESTONES = [
     ],
   },
   {
-    hours: 16,
-    name: 'Autophagy',
-    short: 'Cellular self-cleaning activates',
-    color: '#22d3ee',
+    hours: 16, icon: '♻️', name: 'Autophagy',           cardColor: '#0e7490',
+    short: 'Cellular self-cleaning activates (Nobel 2016)',
     detail: 'Autophagy — the process by which cells disassemble and recycle damaged components — is significantly upregulated. This cellular housekeeping removes dysfunctional proteins and organelles. Yoshinori Ohsumi was awarded the 2016 Nobel Prize in Physiology for discovering its mechanisms.',
     sources: [
       { label: 'Ohsumi Y. (2016)', text: 'Autophagy: An Intracellular Recycling System. Nobel Lecture.', journal: 'Nobel Prize in Physiology or Medicine.' },
@@ -80,10 +74,8 @@ const MILESTONES = [
     ],
   },
   {
-    hours: 24,
-    name: 'Deep Autophagy',
+    hours: 24, icon: '🧬', name: 'Deep Autophagy',      cardColor: '#4338ca',
     short: 'Peak cellular renewal + BDNF rise',
-    color: '#818cf8',
     detail: 'Autophagy reaches peak intensity across most tissues. BDNF (brain-derived neurotrophic factor) increases, supporting neuroplasticity, mood, and cognition. The gut begins cellular renewal. Sirtuins (longevity-linked proteins) are activated.',
     sources: [
       { label: 'Longo VD & Mattson MP. (2014)', text: 'Fasting: Molecular Mechanisms and Clinical Applications.', journal: 'Cell Metabolism, 19(2), 181–192.' },
@@ -91,20 +83,16 @@ const MILESTONES = [
     ],
   },
   {
-    hours: 48,
-    name: 'Immune Recycling',
-    short: 'Old immune cells broken down',
-    color: '#34d399',
+    hours: 48, icon: '🛡️', name: 'Immune Recycling',    cardColor: '#065f46',
+    short: 'Old immune cells recycled, system resets',
     detail: 'Prolonged fasting triggers a reduction in IGF-1 and PKA signalling, prompting the body to recycle aged and damaged immune cells via autophagy. This primes the immune system for regeneration when feeding resumes.',
     sources: [
       { label: 'Cheng CW et al. (2014)', text: 'Prolonged Fasting Reduces IGF-1/PKA to Promote Hematopoietic-Stem-Cell-Based Regeneration.', journal: 'Cell Stem Cell, 14(6), 810–823.' },
     ],
   },
   {
-    hours: 72,
-    name: 'Stem Cell Activation',
-    short: 'Immune system regeneration',
-    color: '#f97316',
+    hours: 72, icon: '🌱', name: 'Stem Cell Boost',     cardColor: '#166534',
+    short: 'Stem cell activation, immune regeneration',
     detail: 'Three days of fasting triggers significant haematopoietic stem cell activation. The immune system undergoes a form of regeneration — old cells are cleared and new immune cells are produced upon refeeding. This is one of the most dramatic effects of extended fasting.',
     sources: [
       { label: 'Cheng CW et al. (2014)', text: 'Cell Stem Cell, 14(6), 810–823.', journal: 'Ibid.' },
@@ -214,6 +202,7 @@ export default function App() {
   const [delTarget, setDelTarget] = useState(null);
   const [scienceOpen,       setScienceOpen]       = useState(false);
   const [selectedMilestone, setSelectedMilestone] = useState(null);
+  const [hoveredMilestone,  setHoveredMilestone]  = useState(null);
 
   const initialized = useRef(false);
 
@@ -490,24 +479,36 @@ export default function App() {
                   transform={`rotate(-90 ${CX} ${CY})`}
                   style={{ transition:'stroke-dashoffset .8s ease, stroke .6s ease' }} />
               )}
-              {/* Milestone markers */}
+              {/* Milestone markers — unified ACCENT color, icon label */}
               {active && MILESTONES.map(m => {
                 if (m.hours > active.goalHours) return null;
                 const mp     = m.hours / active.goalHours;
                 const angle  = mp * 2 * Math.PI - Math.PI / 2;
                 const passed = elapsed >= m.hours * 3_600_000;
-                const mx     = CX + R * Math.cos(angle);
-                const my     = CY + R * Math.sin(angle);
-                // outer label dot
-                const lx = CX + (R + 22) * Math.cos(angle);
-                const ly = CY + (R + 22) * Math.sin(angle);
+                const hovered = hoveredMilestone?.hours === m.hours;
+                const mx = CX + R * Math.cos(angle);
+                const my = CY + R * Math.sin(angle);
+                // icon position: slightly outside the track
+                const ix = CX + (R + 20) * Math.cos(angle);
+                const iy = CY + (R + 20) * Math.sin(angle);
                 return (
-                  <g key={m.hours}>
-                    <circle cx={mx} cy={my} r={5} fill={passed ? m.color : '#1a1a1a'}
-                      stroke={m.color} strokeWidth={1.5}
-                      style={{ transition:'fill .4s ease', filter: passed ? `drop-shadow(0 0 5px ${m.color}88)` : 'none', cursor:'pointer' }}
-                      onClick={() => setSelectedMilestone(m)} />
-                    <circle cx={lx} cy={ly} r={2.5} fill={passed ? m.color : m.color + '44'} />
+                  <g key={m.hours} style={{ cursor:'pointer' }}
+                    onClick={() => setSelectedMilestone(m)}
+                    onMouseEnter={() => setHoveredMilestone(m)}
+                    onMouseLeave={() => setHoveredMilestone(null)}>
+                    {/* Ring dot */}
+                    <circle cx={mx} cy={my} r={hovered ? 8 : 6}
+                      fill={passed ? ACCENT : '#111'}
+                      stroke={passed ? ACCENT : '#333'} strokeWidth={1.5}
+                      style={{ transition:'all .25s ease',
+                        filter: passed ? `drop-shadow(0 0 6px ${ACCENT}99)` : 'none' }} />
+                    {/* Outer icon */}
+                    <text x={ix} y={iy} textAnchor="middle" dominantBaseline="middle"
+                      fontSize={passed ? 11 : 9}
+                      opacity={passed ? 1 : 0.35}
+                      style={{ transition:'all .25s ease', userSelect:'none' }}>
+                      {m.icon}
+                    </text>
                   </g>
                 );
               })}
@@ -579,6 +580,23 @@ export default function App() {
               )}
             </div>
           </div>
+
+          {/* Milestone hover tooltip bar */}
+          {hoveredMilestone && (
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginTop:4, marginBottom:2,
+              background:'#0e0e0e', border:`1px solid ${ACCENT}33`, borderRadius:12,
+              padding:'8px 16px', width:'100%', transition:'opacity .2s' }}>
+              <span style={{ fontSize:'1.1rem', lineHeight:1 }}>{hoveredMilestone.icon}</span>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:'0.7rem', fontWeight:600, color:ACCENT, letterSpacing:'0.08em' }}>
+                  {hoveredMilestone.name}
+                  <span style={{ color:MUTED, fontWeight:400, marginLeft:6 }}>{hoveredMilestone.hours}h</span>
+                </div>
+                <div style={{ fontSize:'0.64rem', color:MUTED, marginTop:2 }}>{hoveredMilestone.short}</div>
+              </div>
+              <span style={{ fontSize:'0.58rem', color:MUTED, flexShrink:0 }}>tap for research</span>
+            </div>
+          )}
 
           {/* Calorie strip */}
           {active && activeKcal !== null && (
@@ -711,7 +729,7 @@ export default function App() {
               {/* Mini milestone dots preview */}
               <div style={{ display:'flex', gap:5 }}>
                 {MILESTONES.map(m => (
-                  <div key={m.hours} style={{ width:7, height:7, borderRadius:'50%', background: m.color + '99' }} />
+                  <div key={m.hours} style={{ width:7, height:7, borderRadius:'50%', background: m.cardColor + '99' }} />
                 ))}
               </div>
               <span style={{ color:MUTED, fontSize:'0.8rem' }}>{scienceOpen ? '▲' : '▼'}</span>
@@ -725,23 +743,24 @@ export default function App() {
                 {MILESTONES.map(m => {
                   const passed = active && elapsed >= m.hours * 3_600_000;
                   return (
-                    <div
-                      key={m.hours}
-                      className="hov"
-                      style={{ background: m.color + '10', border:`1px solid ${m.color}${passed ? 'aa' : '33'}`,
-                        borderRadius:14, padding:'12px 12px', cursor:'pointer',
-                        opacity: passed ? 1 : 0.65 }}
+                    <div key={m.hours} className="hov"
+                      style={{ background: m.cardColor + '18',
+                        border:`1px solid ${m.cardColor}${passed ? '99' : '33'}`,
+                        borderRadius:14, padding:'12px', cursor:'pointer',
+                        opacity: passed ? 1 : 0.55, transition:'opacity .3s, border-color .3s' }}
                       onClick={() => setSelectedMilestone(m)}
                     >
-                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:6 }}>
-                        <span style={{ fontSize:'0.58rem', color: m.color, letterSpacing:'0.12em',
-                          textTransform:'uppercase', fontWeight:600 }}>{m.name}</span>
-                        {passed && <span style={{ fontSize:'0.55rem', color: m.color }}>✓</span>}
+                      {/* Icon + hour row */}
+                      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
+                        <span style={{ fontSize:'1.4rem', lineHeight:1 }}>{m.icon}</span>
+                        <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+                          <span style={{ fontSize:'0.95rem', fontWeight:700, color: m.cardColor }}>{m.hours}h</span>
+                          {passed && <span style={{ fontSize:'0.6rem', color: m.cardColor }}>✓</span>}
+                        </div>
                       </div>
-                      <div style={{ fontSize:'1.2rem', fontWeight:700, color: m.color, lineHeight:1, marginBottom:5 }}>
-                        {m.hours}h
-                      </div>
-                      <div style={{ fontSize:'0.65rem', color:MUTED, lineHeight:1.5 }}>{m.short}</div>
+                      <div style={{ fontSize:'0.62rem', color: m.cardColor, letterSpacing:'0.1em',
+                        textTransform:'uppercase', fontWeight:600, marginBottom:4 }}>{m.name}</div>
+                      <div style={{ fontSize:'0.63rem', color:MUTED, lineHeight:1.55 }}>{m.short}</div>
                     </div>
                   );
                 })}
@@ -968,15 +987,15 @@ export default function App() {
         <Overlay onClose={() => setSelectedMilestone(null)}>
           <div style={{ ...S.modalBox, maxHeight:'88vh', overflowY:'auto' }}>
             {/* Colour band header */}
-            <div style={{ background: selectedMilestone.color + '18',
-              border:`1px solid ${selectedMilestone.color}44`, borderRadius:14,
+            <div style={{ background: selectedMilestone.cardColor + '18',
+              border:`1px solid ${selectedMilestone.cardColor}44`, borderRadius:14,
               padding:'16px', marginBottom:20 }}>
               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
-                <span style={{ fontSize:'0.6rem', color: selectedMilestone.color,
+                <span style={{ fontSize:'0.6rem', color: selectedMilestone.cardColor,
                   letterSpacing:'0.16em', textTransform:'uppercase', fontWeight:600 }}>
                   {selectedMilestone.name}
                 </span>
-                <span style={{ fontSize:'1.6rem', fontWeight:700, color: selectedMilestone.color,
+                <span style={{ fontSize:'1.6rem', fontWeight:700, color: selectedMilestone.cardColor,
                   lineHeight:1 }}>{selectedMilestone.hours}h</span>
               </div>
               <div style={{ fontSize:'0.82rem', color:TEXT, lineHeight:1.5 }}>{selectedMilestone.short}</div>
@@ -996,7 +1015,7 @@ export default function App() {
               {selectedMilestone.sources.map((s, i) => (
                 <div key={i} style={{ background:'#0a0a0a', border:'1px solid #1c1c1c',
                   borderRadius:12, padding:'12px 14px' }}>
-                  <div style={{ fontSize:'0.72rem', fontWeight:600, color: selectedMilestone.color,
+                  <div style={{ fontSize:'0.72rem', fontWeight:600, color: selectedMilestone.cardColor,
                     marginBottom:4 }}>{s.label}</div>
                   <div style={{ fontSize:'0.72rem', color:TEXT, lineHeight:1.55 }}>{s.text}</div>
                   <div style={{ fontSize:'0.66rem', color:MUTED, marginTop:3, fontStyle:'italic' }}>{s.journal}</div>
