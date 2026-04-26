@@ -195,6 +195,53 @@ export default function App() {
   const displayMs   = centerMode === 'elapsed' ? elapsed : remaining;
   const tParts      = parseTime(displayMs);
 
+  // ── import / export ──
+  const [importErr, setImportErr] = useState('');
+  const importRef = useRef(null);
+
+  const exportData = () => {
+    const all = active ? [active, ...logs] : [...logs];
+    const blob = new Blob([JSON.stringify(all, null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `alfie-fasting-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importData = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target.result);
+        if (!Array.isArray(parsed)) throw new Error('Expected a JSON array.');
+        const valid = parsed.filter(l => l.id && l.start);
+        if (!valid.length) throw new Error('No valid entries found.');
+
+        // merge: existing ids win, incoming fills gaps
+        const existingIds = new Set([...logs.map(l => l.id), ...(active ? [active.id] : [])]);
+        const incoming    = valid.filter(l => !existingIds.has(l.id));
+        const newActive   = active ?? incoming.find(l => l.end === null) ?? null;
+        const newLogs     = [
+          ...logs,
+          ...incoming.filter(l => l.end !== null),
+        ].sort((a,b) => new Date(b.start) - new Date(a.start));
+
+        setLogs(newLogs);
+        if (!active && newActive) setActive(newActive);
+        await storeRef.current.set(STORAGE_KEY, newActive ? [newActive, ...newLogs] : newLogs);
+        setImportErr(`✓ Imported ${incoming.length} new entr${incoming.length === 1 ? 'y' : 'ies'}.`);
+      } catch (err) {
+        setImportErr(`Error: ${err.message}`);
+      }
+      e.target.value = '';
+    };
+    reader.readAsText(file);
+  };
+
   // ── calories ──
   const bmr        = useMemo(() => calcBMR(profile.gender, profile.age, profile.weight, profile.height), [profile]);
   const activeKcal = active ? calcKcal(bmr, elapsed) : null;
@@ -487,7 +534,29 @@ export default function App() {
 
         {/* ── HISTORY ── */}
         <div style={{ background:PANEL, border:'1px solid #171717', borderRadius:18, padding:'18px 16px' }}>
-          <div style={{ color:MUTED, fontSize:'0.54rem', letterSpacing:'0.22em', textTransform:'uppercase', marginBottom:14 }}>History</div>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
+            <div style={{ color:MUTED, fontSize:'0.54rem', letterSpacing:'0.22em', textTransform:'uppercase' }}>History</div>
+            <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+              <input ref={importRef} type="file" accept=".json" style={{ display:'none' }} onChange={importData} />
+              <button className="hov" style={{ ...S.ghostBtn, padding:'6px 12px', fontSize:'0.7rem' }}
+                onClick={() => { setImportErr(''); importRef.current?.click(); }}>
+                ↑ Import
+              </button>
+              <button className="hov" style={{ ...S.ghostBtn, padding:'6px 12px', fontSize:'0.7rem' }}
+                onClick={exportData}>
+                ↓ Export
+              </button>
+            </div>
+          </div>
+          {importErr && (
+            <div style={{ fontSize:'0.72rem', color: importErr.startsWith('✓') ? ACCENT : '#f87171',
+              marginBottom:12, padding:'8px 12px', background:'#111', borderRadius:10,
+              border:`1px solid ${importErr.startsWith('✓') ? ACCENT+'44' : '#4a000088'}` }}>
+              {importErr}
+              <button style={{ ...S.linkBtn, display:'inline', marginLeft:10, fontSize:'0.68rem' }}
+                onClick={() => setImportErr('')}>✕</button>
+            </div>
+          )}
           {logs.length === 0
             ? <div style={{ color:MUTED, fontSize:'0.82rem', padding:'6px 0' }}>No completed fasts yet.</div>
             : logs.map(log => {
